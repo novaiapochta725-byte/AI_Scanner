@@ -48,6 +48,11 @@ export async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT
 }
 
 export async function callGemini(apiKey, model, body, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const result = await callGeminiFull(apiKey, model, body, timeoutMs);
+  return result.text;
+}
+
+export async function callGeminiFull(apiKey, model, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -70,7 +75,8 @@ export async function callGemini(apiKey, model, body, timeoutMs = REQUEST_TIMEOU
   }
 
   const data = JSON.parse(errText);
-  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const candidate = data?.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
   const text = parts
     .map((p) => p.text)
     .filter(Boolean)
@@ -83,7 +89,13 @@ export async function callGemini(apiKey, model, body, timeoutMs = REQUEST_TIMEOU
     throw err;
   }
 
-  return text;
+  const grounding = candidate?.groundingMetadata || data?.groundingMetadata || {};
+
+  return {
+    text,
+    groundingChunks: grounding.groundingChunks || [],
+    webSearchQueries: grounding.webSearchQueries || [],
+  };
 }
 
 export function extractJsonBlock(text) {

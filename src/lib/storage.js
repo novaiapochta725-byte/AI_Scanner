@@ -1,12 +1,19 @@
+import { detectDefaultRegion, DEFAULT_REGION } from './regions.js';
+
 const API_KEY_STORAGE = 'gemini_api_key';
 const HISTORY_STORAGE = 'scan_history';
 const TRANSLATE_SETTINGS_KEY = 'translate_settings';
+const SHOPPING_SETTINGS_KEY = 'shopping_settings';
 const MAX_HISTORY = 20;
 
 const DEFAULT_TRANSLATE_SETTINGS = {
   targetLanguage: 'ru',
   echoTargetLanguage: true,
   showTranscripts: true,
+};
+
+const DEFAULT_SHOPPING_SETTINGS = {
+  region: typeof detectDefaultRegion === 'function' ? detectDefaultRegion() : DEFAULT_REGION,
 };
 
 let prefsModule = null;
@@ -188,5 +195,26 @@ export async function saveTranslateSettings(settings) {
   const merged = { ...DEFAULT_TRANSLATE_SETTINGS, ...settings };
   writeLocal(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
   void write(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
+  return merged;
+}
+
+export function getShoppingSettingsLocal() {
+  try {
+    const raw = readLocal(SHOPPING_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_SHOPPING_SETTINGS };
+    return { ...DEFAULT_SHOPPING_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_SHOPPING_SETTINGS };
+  }
+}
+
+export async function getShoppingSettings() {
+  return getShoppingSettingsLocal();
+}
+
+export async function saveShoppingSettings(settings) {
+  const merged = { ...DEFAULT_SHOPPING_SETTINGS, ...settings };
+  writeLocal(SHOPPING_SETTINGS_KEY, JSON.stringify(merged));
+  void write(SHOPPING_SETTINGS_KEY, JSON.stringify(merged));
   return merged;
 }

@@ -111,8 +111,11 @@ function createWebApi() {
     findPrices: async (product) => {
       const apiKey = storage.getApiKeyLocal() || (await storage.getApiKey());
       if (!apiKey) throw new Error('API key not configured. Go to Settings → API.');
-      return findProductPrices(apiKey, product);
+      const { region } = storage.getShoppingSettingsLocal();
+      return findProductPrices(apiKey, product, region);
     },
+    getShoppingSettings: () => storage.getShoppingSettings(),
+    saveShoppingSettings: (s) => storage.saveShoppingSettings(s),
     openExternal,
     getHistory: () => storage.loadHistory(),
     getHistoryItem: (id) => storage.getHistoryItem(id),

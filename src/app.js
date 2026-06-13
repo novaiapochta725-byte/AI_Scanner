@@ -1,5 +1,7 @@
 import { bindButton, blurActiveInput, dismissKeyboard, scrollIntoView } from './lib/touch.js';
 import { initTranslateUI, stopTranslateIfRunning } from './lib/translate-ui.js';
+import { buildGoogleShoppingUrl, buildStoreSearchUrl } from './lib/shopping-urls.js';
+import { getRegion, listRegions } from './lib/regions.js';
 
 let currentImage = null;
 let currentResult = null;
@@ -152,8 +154,7 @@ function renderPrices(prices) {
       const linkBtn = document.createElement('button');
       linkBtn.type = 'button';
       linkBtn.className = 'btn btn-ghost btn-sm price-offer-link';
-      linkBtn.textContent = 'Open';
-      linkBtn.dataset.url = offer.url;
+      linkBtn.textContent = offer.url.includes('google') ? 'Search' : 'Open';
       bindButton(linkBtn, () => window.api.openExternal(offer.url));
       li.appendChild(linkBtn);
     }
@@ -161,7 +162,10 @@ function renderPrices(prices) {
     list.appendChild(li);
   });
 
-  $('#price-summary').textContent = prices.search_summary || '';
+  $('#price-summary').textContent = [
+    prices.search_summary,
+    prices.region ? `Region: ${getRegion(prices.region).name} · ${prices.currency}` : '',
+  ].filter(Boolean).join(' · ');
   scrollIntoView($('#price-section'));
 }
 
@@ -169,6 +173,11 @@ async function findPricesForProduct(product) {
   if (!product) return;
   const token = ++priceSearchToken;
   showPriceState('loading');
+  const region = getActiveRegion();
+  const loadingEl = $('#price-loading p');
+  if (loadingEl) {
+    loadingEl.textContent = `Searching ${region.name} stores (${region.currency})…`;
+  }
 
   try {
     const prices = await Promise.race([
@@ -208,18 +217,23 @@ function renderResult(result) {
 }
 
 function buildSearchUrl(platform, query) {
-  const q = encodeURIComponent(query);
-  switch (platform) {
-    case 'google':
-      return `https://www.google.com/search?q=${q}+price`;
-    case 'amazon':
-      return `https://www.amazon.com/s?k=${q}`;
-    case 'ebay':
-      return `https://www.ebay.com/sch/i.html?_nkw=${q}`;
-    case 'google-results':
-      return `https://www.google.com/search?q=${q}`;
-    default:
-      return `https://www.google.com/search?q=${q}`;
+  const region = getActiveRegion();
+  if (platform === 'google') {
+    return buildGoogleShoppingUrl(`${query} price`, region.code);
+  }
+  return buildStoreSearchUrl(platform === 'amazon' ? 'Amazon' : 'eBay', query, region.code);
+}
+
+function getActiveRegion() {
+  return getRegion(window._shoppingRegion || 'GB');
+}
+
+async function loadShoppingRegion() {
+  try {
+    const s = await window.api.getShoppingSettings();
+    window._shoppingRegion = s.region;
+  } catch {
+    window._shoppingRegion = 'GB';
   }
 }
 
@@ -612,6 +626,25 @@ function initSettings() {
     e.preventDefault();
     window.api.openExternal('https://aistudio.google.com/apikey');
   });
+
+  const regionSelect = $('#shopping-region');
+  if (regionSelect) {
+    for (const r of listRegions()) {
+      const opt = document.createElement('option');
+      opt.value = r.code;
+      opt.textContent = `${r.name} (${r.currency})`;
+      regionSelect.appendChild(opt);
+    }
+    window.api.getShoppingSettings().then((s) => {
+      regionSelect.value = s.region;
+      window._shoppingRegion = s.region;
+    });
+    regionSelect.addEventListener('change', async () => {
+      const region = regionSelect.value;
+      await window.api.saveShoppingSettings({ region });
+      window._shoppingRegion = region;
+    });
+  }
 }
 
 function initError() {
@@ -628,6 +661,7 @@ export async function initApp() {
   initSettings();
   initError();
   await initTranslateUI();
+  await loadShoppingRegion();
   showResultState('empty');
 
   const hasKey = await window.api.hasApiKey();
