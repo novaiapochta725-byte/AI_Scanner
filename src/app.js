@@ -186,7 +186,7 @@ async function findPricesForProduct(product) {
     const prices = await Promise.race([
       window.api.findPrices(product),
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Price search timed out (45s).')), 45000);
+        setTimeout(() => reject(new Error('Price search timed out (60s).')), 60000);
       }),
     ]);
     if (token !== priceSearchToken) return;

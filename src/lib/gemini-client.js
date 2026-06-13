@@ -1,7 +1,7 @@
 export const REQUEST_TIMEOUT_MS = 45000;
 export const VISUAL_TIMEOUT_MS = 35000;
 export const ENRICH_TIMEOUT_MS = 18000;
-export const PRICE_TIMEOUT_MS = 45000;
+export const PRICE_TIMEOUT_MS = 60000;
 export const MAP_TIMEOUT_MS = 15000;
 
 export const PRIMARY_MODEL = 'gemini-2.5-flash';

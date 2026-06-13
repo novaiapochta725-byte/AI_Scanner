@@ -1,20 +1,14 @@
-import {
-  callGeminiFull,
-  parseJsonLenient,
-  PRICE_TIMEOUT_MS,
-  MAP_TIMEOUT_MS,
-  PRIMARY_MODEL,
-  FALLBACK_MODEL,
-} from './gemini-client.js';
+﻿import { callGeminiFull, parseJsonLenient, PRICE_TIMEOUT_MS } from './gemini-client.js';
 import { getRegion } from './regions.js';
 import {
   extractGroundingLinks,
   formatSourcesCatalog,
-  mapOffersLocally,
   resolveProductListingUrl,
 } from './shopping-urls.js';
 
-function buildPricePrompt(product, region) {
+const PRICE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+
+function buildPricePrompt(product, region, compact = false) {
   const name = product.product_name || 'Unknown product';
   const brand = product.brand || '';
   const query = product.search_query || name;
@@ -22,7 +16,18 @@ function buildPricePrompt(product, region) {
 
   const jsonExample = `{"currency":"${region.currency}","offers":[{"store":"${region.stores[0]}","title":"exact listing title","price":99.99,"price_display":"${region.symbol}99.99","condition":"new","shipping":"free","source_index":0,"source_title":"amazon.co.uk - product name"}],"best_deal":{"store":"${region.stores[0]}","price":99.99,"price_display":"${region.symbol}99.99","source_index":0,"reason":"why best"},"search_summary":"one line"}`;
 
-  return `Search Google (${region.googleDomain}) for BUY prices in ${region.name}.
+  const rules = `
+CRITICAL RULES:
+- Each offer MUST be a SPECIFIC product listing from Google Search (not a store homepage or search page).
+- Each offer MUST include "source_index": integer — the search result number for that exact listing.
+- Each offer MUST include "source_title": the search result title for that listing.
+- price must match the price shown on that listing.
+- Do NOT invent URLs. Do NOT include "url" field.
+- Skip offers without a specific product page in search results.
+- currency="${region.currency}", all prices in ${region.symbol}.`;
+
+  if (compact) {
+    return `Search Google (${region.googleDomain}) for BUY prices in ${region.name}.
 ${region.searchHint}
 Product: ${name} (${brand})
 Query: ${query} buy price ${region.name}
@@ -30,12 +35,23 @@ Stores: ${stores}
 
 Return ONLY minified JSON:
 ${jsonExample}
+${rules}
+Need 5-8 offers with valid source_index, sorted by price.`;
+  }
 
-Rules:
-- Each offer = SPECIFIC product listing from Google Search (not homepage/search page).
-- Each offer needs source_index (search result #) and source_title.
-- price must match listing. currency="${region.currency}".
-- Skip offers without a product page in search. 5-8 offers, sorted by price.`;
+  return `You are a price comparison agent for ${region.name}.
+Use Google Search (${region.googleDomain}) to find SPECIFIC product listing pages with prices.
+
+Product: ${name}
+Brand: ${brand}
+Search: ${query}
+Stores: ${stores}
+
+Find 5-8 specific product listings. Pick best_deal from listings with direct product pages.
+
+Output ONLY raw JSON. No markdown.
+${jsonExample}
+${rules}`;
 }
 
 function parsePriceNumber(value) {
@@ -53,7 +69,7 @@ function parsePriceNumber(value) {
 
 function formatPrice(price, region, display) {
   if (display && display.trim()) return display.trim();
-  if (price == null) return '—';
+  if (price == null) return 'ΓÇö';
   try {
     return new Intl.NumberFormat(region.locale, {
       style: 'currency',
@@ -143,11 +159,11 @@ Rules: only map when the search result is the specific product page for that pri
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0,
-          maxOutputTokens: 1024,
+          maxOutputTokens: 2048,
           responseMimeType: 'application/json',
         },
       },
-      MAP_TIMEOUT_MS
+      25000
     );
 
     const parsed = parseJsonLenient(text);
@@ -167,13 +183,13 @@ Rules: only map when the search result is the specific product page for that pri
   }
 }
 
-async function callPriceSearch(apiKey, model, product, region) {
+async function callPriceSearch(apiKey, model, product, region, { compact }) {
   const body = {
-    contents: [{ parts: [{ text: buildPricePrompt(product, region) }] }],
+    contents: [{ parts: [{ text: buildPricePrompt(product, region, compact) }] }],
     tools: [{ google_search: {} }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
     },
   };
 
@@ -192,10 +208,9 @@ async function callPriceSearch(apiKey, model, product, region) {
     throw new Error('Could not read prices from response. Tap Retry.');
   }
 
-  let rawOffers = mapOffersLocally(parsed.offers, groundingLinks);
-  let result = normalizePriceResult({ ...parsed, offers: rawOffers }, region, groundingLinks);
+  let result = normalizePriceResult(parsed, region, groundingLinks);
 
-  if (result.offers.length === 0) {
+  if (result.offers.length < 3) {
     const remapped = await mapOffersToSources(apiKey, model, parsed.offers, groundingLinks);
     result = normalizePriceResult({ ...parsed, offers: remapped }, region, groundingLinks);
   }
@@ -210,18 +225,25 @@ export async function findProductPrices(apiKey, product, regionCode = 'GB') {
 
   const region = getRegion(regionCode);
   let lastError = null;
+  const attempts = [{ compact: false }, { compact: true }];
 
-  for (const model of [PRIMARY_MODEL, FALLBACK_MODEL]) {
-    try {
-      const result = await callPriceSearch(apiKey, model, product, region);
-      if (!result.offers.length) {
-        throw new Error('No product listing links found. Tap Retry.');
+  for (const model of PRICE_MODELS) {
+    for (const mode of attempts) {
+      try {
+        const result = await callPriceSearch(apiKey, model, product, region, mode);
+        if (!result.offers.length) {
+          throw new Error('No product listing links found. Tap Retry.');
+        }
+        return result;
+      } catch (err) {
+        lastError = err;
+        const msg = err.message || '';
+        if (err.status === 404 || err.status === 429) break;
+        if (/parse|JSON|read prices|listing links|product pages/i.test(msg)) continue;
+        if (err.status === 408) continue;
       }
-      return result;
-    } catch (err) {
-      lastError = err;
-      if (err.status === 404 || err.status === 429) break;
     }
+    if (lastError?.status === 404 || lastError?.status === 429) break;
   }
 
   throw lastError || new Error('Price search failed. Check API key and quota.');
