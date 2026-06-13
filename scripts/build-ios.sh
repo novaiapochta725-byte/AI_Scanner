@@ -5,11 +5,13 @@ SCHEME="${SCHEME:-App}"
 WORKSPACE="${WORKSPACE:-ios/App/App.xcworkspace}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-build/App.xcarchive}"
 EXPORT_PATH="${EXPORT_PATH:-build/ipa}"
-EXPORT_METHOD="${EXPORT_METHOD:-app-store}"
 
-echo "→ Building web + syncing..."
-npm ci
-npm run build
+if [ ! -f "$WORKSPACE/contents.xcworkspacedata" ]; then
+  echo "Error: Xcode workspace not found at $WORKSPACE"
+  exit 1
+fi
+
+echo "→ Syncing Capacitor..."
 npx cap sync ios
 
 echo "→ Archiving..."

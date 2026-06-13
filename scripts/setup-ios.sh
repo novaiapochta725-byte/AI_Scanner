@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "→ Installing dependencies..."
-npm ci
-
-echo "→ Building web assets..."
-npm run build
-
-if [ ! -d "ios" ]; then
-  echo "→ Adding iOS platform..."
-  npx cap add ios
-fi
-
 echo "→ Syncing Capacitor iOS project..."
 npx cap sync ios
 

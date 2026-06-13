@@ -29,7 +29,7 @@ jobs:
 
       - name: Setup iOS platform
         run: |
-          if [ ! -d "ios" ]; then
+          if [ ! -f "ios/App/App.xcworkspace/contents.xcworkspacedata" ]; then
             npx cap add ios
           fi
           npx cap sync ios
@@ -74,6 +74,10 @@ jobs:
           PROVISIONING_PROFILE_SPECIFIER: ${{ secrets.PROVISIONING_PROFILE_SPECIFIER }}
           CODE_SIGN_IDENTITY: ${{ secrets.CODE_SIGN_IDENTITY }}
         run: |
+          if [ ! -f "ios/App/App.xcworkspace/contents.xcworkspacedata" ]; then
+            echo "::error::iOS Xcode project was not generated. Check Capacitor setup step."
+            exit 1
+          fi
           if [ -z "$APPLE_TEAM_ID" ]; then
             echo "::warning::APPLE_TEAM_ID not set. Building unsigned archive for validation only."
             xcodebuild archive \
