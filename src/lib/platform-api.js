@@ -1,4 +1,4 @@
-import { analyzeProduct } from './gemini.js';
+import { analyzeProduct, enrichProductSearch, mergeResults, shouldEnrichProduct } from './gemini.js';
 import { findProductPrices } from './price-agent.js';
 import * as storage from './storage.js';
 
@@ -107,6 +107,13 @@ function createWebApi() {
         console.warn('History save failed', err);
       });
       return { result };
+    },
+    enrichProduct: async (product) => {
+      if (!shouldEnrichProduct(product)) return null;
+      const apiKey = storage.getApiKeyLocal() || (await storage.getApiKey());
+      if (!apiKey) return null;
+      const enriched = await enrichProductSearch(apiKey, product);
+      return enriched ? mergeResults(product, enriched) : null;
     },
     findPrices: async (product) => {
       const apiKey = storage.getApiKeyLocal() || (await storage.getApiKey());

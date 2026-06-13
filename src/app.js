@@ -8,6 +8,8 @@ let currentResult = null;
 let currentPrices = null;
 let cameraStream = null;
 let priceSearchToken = 0;
+let enrichToken = 0;
+let priceLoading = false;
 
 function setButtonLoading(btn, loading, label) {
   if (!btn) return;
@@ -172,6 +174,7 @@ function renderPrices(prices) {
 async function findPricesForProduct(product) {
   if (!product) return;
   const token = ++priceSearchToken;
+  priceLoading = true;
   showPriceState('loading');
   const region = getActiveRegion();
   const loadingEl = $('#price-loading p');
@@ -183,7 +186,7 @@ async function findPricesForProduct(product) {
     const prices = await Promise.race([
       window.api.findPrices(product),
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Price search timed out (60s).')), 60000);
+        setTimeout(() => reject(new Error('Price search timed out (45s).')), 45000);
       }),
     ]);
     if (token !== priceSearchToken) return;
@@ -192,12 +195,12 @@ async function findPricesForProduct(product) {
     if (token !== priceSearchToken) return;
     showPriceState('error');
     $('#price-error-message').textContent = err.message || 'Price search failed.';
+  } finally {
+    if (token === priceSearchToken) priceLoading = false;
   }
 }
 
-function renderResult(result) {
-  currentResult = result;
-  clearPrices();
+function updateResultFields(result) {
   $('#result-name').textContent = result.product_name;
   $('#result-confidence').textContent = `${result.confidence}%`;
   $('#result-brand').textContent = result.brand;
@@ -211,9 +214,41 @@ function renderResult(result) {
     li.textContent = alt;
     altList.appendChild(li);
   });
+}
 
+async function backgroundEnrichProduct(visual) {
+  if (!window.api.enrichProduct) return;
+  const token = ++enrichToken;
+  const prevQuery = visual.search_query;
+
+  try {
+    const merged = await window.api.enrichProduct(visual);
+    if (!merged || token !== enrichToken) return;
+
+    const queryImproved = merged.search_query && merged.search_query !== prevQuery;
+    const nameImproved = merged.product_name !== visual.product_name;
+    const confidenceImproved = (merged.confidence || 0) > (visual.confidence || 0);
+
+    if (!queryImproved && !nameImproved && !confidenceImproved) return;
+
+    currentResult = merged;
+    updateResultFields(merged);
+
+    if (priceLoading && queryImproved) {
+      void findPricesForProduct(merged);
+    }
+  } catch {
+    /* background enrich is optional */
+  }
+}
+
+function renderResult(result) {
+  currentResult = result;
+  clearPrices();
+  updateResultFields(result);
   showResultState('content');
   void findPricesForProduct(result);
+  void backgroundEnrichProduct(result);
 }
 
 function buildSearchUrl(platform, query) {
@@ -321,7 +356,7 @@ async function analyzeImage() {
     const { result } = await Promise.race([
       window.api.analyzeImage(prepared.base64, prepared.mimeType),
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Analysis timed out (90s). Try again.')), 90000);
+        setTimeout(() => reject(new Error('Analysis timed out (40s). Try again.')), 40000);
       }),
     ]);
     renderResult(result);

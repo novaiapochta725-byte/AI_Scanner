@@ -107,13 +107,25 @@ export function findBestListingMatch(offer, groundingLinks) {
     }
   }
 
-  return bestScore >= 4 ? best : null;
+  return bestScore >= 3 ? best : null;
 }
 
 /** Product listing URL only — never a generic store search page */
 export function resolveProductListingUrl(offer, groundingLinks) {
   const match = findBestListingMatch(offer, groundingLinks);
   return match?.uri || null;
+}
+
+export function mapOffersLocally(rawOffers, groundingLinks) {
+  return rawOffers.map((offer) => {
+    const match = findBestListingMatch(offer, groundingLinks);
+    if (!match) return offer;
+    return {
+      ...offer,
+      source_index: offer.source_index ?? offer.sourceIndex ?? match.index,
+      source_title: offer.source_title || offer.sourceTitle || match.title,
+    };
+  });
 }
 
 export function formatSourcesCatalog(groundingLinks) {
