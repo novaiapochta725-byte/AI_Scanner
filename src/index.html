@@ -31,8 +31,8 @@
         <div class="panel panel-source">
           <h2 class="section-label">Image source</h2>
           <div class="source-buttons">
-            <button id="btn-upload" class="btn btn-primary">Upload</button>
-            <button id="btn-camera" class="btn btn-secondary">Camera</button>
+            <button type="button" id="btn-upload" class="btn btn-primary">Upload</button>
+            <button type="button" id="btn-camera" class="btn btn-secondary">Camera</button>
             <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" hidden />
           </div>
 
@@ -55,7 +55,7 @@
             <button id="btn-clear-image" class="btn btn-ghost btn-sm">Clear</button>
           </div>
 
-          <button id="btn-analyze" class="btn btn-accent btn-analyze" disabled>
+          <button type="button" id="btn-analyze" class="btn btn-accent btn-analyze" disabled>
             Analyze product
           </button>
         </div>
@@ -134,10 +134,11 @@
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
+            enterkeyhint="done"
           />
           <div class="settings-actions">
-            <button id="btn-save-key" class="btn btn-primary">Save</button>
-            <button id="btn-reset-key" class="btn btn-ghost">Reset API key</button>
+            <button type="button" id="btn-save-key" class="btn btn-primary">Save</button>
+            <button type="button" id="btn-reset-key" class="btn btn-ghost">Reset API key</button>
           </div>
           <p id="settings-status" class="settings-status"></p>
         </div>

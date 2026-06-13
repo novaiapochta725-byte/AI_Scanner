@@ -1,7 +1,33 @@
+import { bindButton, blurActiveInput, scrollIntoView } from './lib/touch.js';
+
 let currentImage = null;
 let currentResult = null;
 let cameraStream = null;
 
+function setButtonLoading(btn, loading, label) {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.label = btn.textContent;
+    btn.textContent = label || '…';
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+  } else {
+    btn.textContent = btn.dataset.label || btn.textContent;
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+  }
+}
+
+async function hapticSuccess() {
+  try {
+    if (window.Capacitor?.isNativePlatform?.()) {
+      const { Haptics, ImpactStyle } = await import('@capacitor/haptics');
+      await Haptics.impact({ style: ImpactStyle.Light });
+    }
+  } catch {
+    /* optional */
+  }
+}
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
@@ -147,10 +173,18 @@ async function prepareImageForAnalysis(dataUrl) {
 async function analyzeImage() {
   if (!currentImage) return;
 
+  blurActiveInput();
+  const btn = $('#btn-analyze');
+  setButtonLoading(btn, true, 'Analyzing…');
+  scrollIntoView($('.panel-result'));
+
   const hasKey = await window.api.hasApiKey();
   if (!hasKey) {
+    setButtonLoading(btn, false);
+    btn.disabled = false;
     showResultState('error');
     $('#error-message').textContent = 'API key not configured. Please add your Gemini API key in Settings.';
+    scrollIntoView($('#result-error'));
     return;
   }
 
@@ -166,9 +200,15 @@ async function analyzeImage() {
       prepared.mimeType
     );
     renderResult(result);
+    scrollIntoView($('#result-content'));
+    await hapticSuccess();
   } catch (err) {
     showResultState('error');
     $('#error-message').textContent = err.message || 'Analysis failed. Please try again.';
+    scrollIntoView($('#result-error'));
+  } finally {
+    setButtonLoading(btn, false);
+    btn.disabled = !currentImage;
   }
 }
 
@@ -283,7 +323,7 @@ function initNavigation() {
 function initUpload() {
   const fileInput = $('#file-input');
 
-  $('#btn-upload').addEventListener('click', async () => {
+  bindButton($('#btn-upload'), async () => {
     if (window.api.pickPhoto) {
       try {
         const data = await window.api.pickPhoto();
@@ -322,7 +362,7 @@ function initUpload() {
 }
 
 function initCamera() {
-  $('#btn-camera').addEventListener('click', async () => {
+  bindButton($('#btn-camera'), async () => {
     if (window.api.takePhoto) {
       try {
         const data = await window.api.takePhoto();
@@ -345,8 +385,8 @@ function initCamera() {
 }
 
 function initAnalyze() {
-  $('#btn-analyze').addEventListener('click', analyzeImage);
-  $('#btn-clear-image').addEventListener('click', () => {
+  bindButton($('#btn-analyze'), analyzeImage);
+  bindButton($('#btn-clear-image'), () => {
     clearImage();
     showResultState('empty');
     currentResult = null;
@@ -378,25 +418,47 @@ function initSettings() {
 
   window.updateSettingsStatus = updateSettingsStatus;
 
-  $('#btn-save-key').addEventListener('click', async () => {
+  async function saveApiKey() {
+    blurActiveInput();
     const key = $('#api-key-input').value.trim();
     const status = $('#settings-status');
+    const btn = $('#btn-save-key');
+
     if (!key) {
       status.textContent = 'Please enter an API key.';
       status.classList.add('error');
+      scrollIntoView(status);
       return;
     }
+
+    setButtonLoading(btn, true, 'Saving…');
     try {
       await window.api.saveApiKey(key);
       $('#api-key-input').value = '';
+      status.textContent = '✓ API key saved successfully!';
+      status.classList.remove('error');
       await updateSettingsStatus();
+      scrollIntoView(status);
+      await hapticSuccess();
     } catch (err) {
       status.textContent = err.message || 'Failed to save key.';
       status.classList.add('error');
+      scrollIntoView(status);
+    } finally {
+      setButtonLoading(btn, false);
+    }
+  }
+
+  bindButton($('#btn-save-key'), saveApiKey);
+
+  $('#api-key-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveApiKey();
     }
   });
 
-  $('#btn-reset-key').addEventListener('click', async () => {
+  bindButton($('#btn-reset-key'), async () => {
     if (!confirm('Remove saved API key?')) return;
     await window.api.resetApiKey();
     $('#api-key-input').value = '';

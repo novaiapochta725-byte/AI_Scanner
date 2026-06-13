@@ -110,6 +110,13 @@ export async function initPlatformApi() {
     } catch {
       // optional
     }
+    try {
+      const { Keyboard, KeyboardResize } = await import('@capacitor/keyboard');
+      await Keyboard.setResizeMode({ mode: KeyboardResize.Body });
+      await Keyboard.setScroll({ isDisabled: false });
+    } catch {
+      // optional
+    }
   }
 
   return window.api;

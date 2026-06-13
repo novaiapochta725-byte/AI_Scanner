@@ -13,34 +13,58 @@ async function getPrefs() {
 }
 
 async function read(key) {
-  const Prefs = await getPrefs();
-  if (Prefs) {
-    const { value } = await Prefs.get({ key });
-    return value;
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) {
+      const { value } = await Prefs.get({ key });
+      if (value != null) return value;
+    }
+  } catch (err) {
+    console.warn('Preferences read failed, trying localStorage', err);
   }
-  return localStorage.getItem(key);
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 
 async function write(key, value) {
-  const Prefs = await getPrefs();
-  if (Prefs) {
-    await Prefs.set({ key, value });
-  } else {
+  let saved = false;
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) {
+      await Prefs.set({ key, value });
+      saved = true;
+    }
+  } catch (err) {
+    console.warn('Preferences write failed, using localStorage', err);
+  }
+  if (!saved) {
     localStorage.setItem(key, value);
   }
 }
 
 async function remove(key) {
-  const Prefs = await getPrefs();
-  if (Prefs) {
-    await Prefs.remove({ key });
-  } else {
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) await Prefs.remove({ key });
+  } catch (err) {
+    console.warn('Preferences remove failed', err);
+  }
+  try {
     localStorage.removeItem(key);
+  } catch {
+    /* ignore */
   }
 }
 
 export async function saveApiKey(apiKey) {
   await write(API_KEY_STORAGE, apiKey);
+  const check = await read(API_KEY_STORAGE);
+  if (check !== apiKey) {
+    throw new Error('Could not save API key. Try again.');
+  }
 }
 
 export async function getApiKey() {

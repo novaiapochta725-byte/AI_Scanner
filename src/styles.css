@@ -170,6 +170,12 @@ body {
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn.is-loading {
+  opacity: 0.85;
+  pointer-events: none;
 }
 
 .btn-primary {
@@ -496,20 +502,10 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: var(--text-base);
+  font-size: 16px;
   font-family: inherit;
   margin-bottom: 12px;
-}
-
-.settings-card input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.settings-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  scroll-margin-bottom: 80px;
 }
 
 .settings-status {
