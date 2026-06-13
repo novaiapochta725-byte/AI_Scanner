@@ -3,7 +3,9 @@ import { initTranslateUI, stopTranslateIfRunning } from './lib/translate-ui.js';
 
 let currentImage = null;
 let currentResult = null;
+let currentPrices = null;
 let cameraStream = null;
+let priceSearchToken = 0;
 
 function setButtonLoading(btn, loading, label) {
   if (!btn) return;
@@ -83,8 +85,110 @@ function showResultState(state) {
   $('#result-error').classList.toggle('hidden', state !== 'error');
 }
 
+function showPriceState(state) {
+  $('#price-loading')?.classList.toggle('hidden', state !== 'loading');
+  $('#price-content')?.classList.toggle('hidden', state !== 'content');
+  $('#price-error')?.classList.toggle('hidden', state !== 'error');
+  if (state === 'hidden') {
+    $('#price-loading')?.classList.add('hidden');
+    $('#price-content')?.classList.add('hidden');
+    $('#price-error')?.classList.add('hidden');
+  }
+}
+
+function clearPrices() {
+  currentPrices = null;
+  showPriceState('hidden');
+  $('#price-offers').innerHTML = '';
+  $('#best-deal-card')?.classList.add('hidden');
+  $('#price-summary').textContent = '';
+  $('#price-error-message').textContent = '';
+}
+
+function renderPrices(prices) {
+  currentPrices = prices;
+  if (!prices?.offers?.length) {
+    showPriceState('error');
+    $('#price-error-message').textContent = 'No prices found.';
+    return;
+  }
+
+  showPriceState('content');
+
+  const best = prices.best_deal;
+  const bestCard = $('#best-deal-card');
+  if (best?.price) {
+    bestCard.classList.remove('hidden');
+    $('#best-deal-store').textContent = best.store;
+    $('#best-deal-price').textContent = best.price_display;
+    $('#best-deal-reason').textContent = best.reason || 'Best overall value';
+    const bestBtn = $('#btn-best-deal-link');
+    bestBtn.disabled = !best.url;
+    bestBtn.dataset.url = best.url || '';
+  } else {
+    bestCard.classList.add('hidden');
+  }
+
+  const list = $('#price-offers');
+  list.innerHTML = '';
+  prices.offers.forEach((offer, i) => {
+    const li = document.createElement('li');
+    li.className = 'price-offer' + (best && offer.price === best.price && offer.store === best.store ? ' is-best' : '');
+
+    const main = document.createElement('div');
+    main.className = 'price-offer-main';
+    main.innerHTML = `
+      <span class="price-offer-rank">${i + 1}</span>
+      <div class="price-offer-info">
+        <strong>${escapeHtml(offer.store)}</strong>
+        <span class="price-offer-title">${escapeHtml(offer.title || offer.store)}</span>
+        <span class="price-offer-meta">${escapeHtml(offer.condition)} · ${escapeHtml(offer.shipping)} shipping</span>
+      </div>
+      <span class="price-offer-amount">${escapeHtml(offer.price_display)}</span>
+    `;
+    li.appendChild(main);
+
+    if (offer.url) {
+      const linkBtn = document.createElement('button');
+      linkBtn.type = 'button';
+      linkBtn.className = 'btn btn-ghost btn-sm price-offer-link';
+      linkBtn.textContent = 'Open';
+      linkBtn.dataset.url = offer.url;
+      bindButton(linkBtn, () => window.api.openExternal(offer.url));
+      li.appendChild(linkBtn);
+    }
+
+    list.appendChild(li);
+  });
+
+  $('#price-summary').textContent = prices.search_summary || '';
+  scrollIntoView($('#price-section'));
+}
+
+async function findPricesForProduct(product) {
+  if (!product) return;
+  const token = ++priceSearchToken;
+  showPriceState('loading');
+
+  try {
+    const prices = await Promise.race([
+      window.api.findPrices(product),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Price search timed out (60s).')), 60000);
+      }),
+    ]);
+    if (token !== priceSearchToken) return;
+    renderPrices(prices);
+  } catch (err) {
+    if (token !== priceSearchToken) return;
+    showPriceState('error');
+    $('#price-error-message').textContent = err.message || 'Price search failed.';
+  }
+}
+
 function renderResult(result) {
   currentResult = result;
+  clearPrices();
   $('#result-name').textContent = result.product_name;
   $('#result-confidence').textContent = `${result.confidence}%`;
   $('#result-brand').textContent = result.brand;
@@ -100,6 +204,7 @@ function renderResult(result) {
   });
 
   showResultState('content');
+  void findPricesForProduct(result);
 }
 
 function buildSearchUrl(platform, query) {
@@ -192,6 +297,7 @@ async function analyzeImage() {
   }
 
   showResultState('loading');
+  $('#result-loading-text').textContent = 'Identifying product…';
 
   try {
     const previewSrc = currentImage.previewSrc ||
@@ -395,16 +501,27 @@ function initAnalyze() {
   bindButton($('#btn-analyze'), analyzeImage);
   bindButton($('#btn-clear-image'), () => {
     clearImage();
+    clearPrices();
+    priceSearchToken++;
     showResultState('empty');
     currentResult = null;
   });
 }
 
 function initSearch() {
-  $('#btn-search-google').addEventListener('click', () => openSearch('google'));
-  $('#btn-search-amazon').addEventListener('click', () => openSearch('amazon'));
-  $('#btn-search-ebay').addEventListener('click', () => openSearch('ebay'));
-  $('#btn-open-google-results').addEventListener('click', () => openSearch('google-results'));
+  bindButton($('#btn-refresh-prices'), () => {
+    if (currentResult) findPricesForProduct(currentResult);
+  });
+  bindButton($('#btn-retry-prices'), () => {
+    if (currentResult) findPricesForProduct(currentResult);
+  });
+  bindButton($('#btn-best-deal-link'), () => {
+    const url = $('#btn-best-deal-link').dataset.url;
+    if (url) window.api.openExternal(url);
+  });
+  bindButton($('#btn-search-google'), () => openSearch('google'));
+  bindButton($('#btn-search-amazon'), () => openSearch('amazon'));
+  bindButton($('#btn-search-ebay'), () => openSearch('ebay'));
 }
 
 function initSettings() {

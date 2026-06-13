@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "electron .",
-    "start:desktop": "electron .",
+    "start": "npm run build && electron .",
+    "start:desktop": "npm run build && electron .",
+    "electron:dev": "electron .",
     "cap:init": "npx cap add ios",
     "cap:sync": "npm run build && npx cap sync ios",
     "cap:open": "npx cap open ios",

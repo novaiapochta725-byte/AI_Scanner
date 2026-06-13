@@ -1,23 +1,31 @@
 import { analyzeProduct } from './gemini.js';
+import { findProductPrices } from './price-agent.js';
 import * as storage from './storage.js';
 
 export function isNativePlatform() {
   return window.Capacitor?.isNativePlatform?.() ?? false;
 }
 
-export function isIOS() {
-  return window.Capacitor?.getPlatform?.() === 'ios';
+export function isElectron() {
+  return !!window.api?.isElectron;
+}
+
+export function isDesktop() {
+  return isElectron() || (!isNativePlatform() && window.matchMedia('(pointer: fine)').matches);
 }
 
 async function openExternal(url) {
   if (typeof url !== 'string' || !url.startsWith('https://')) {
     throw new Error('Invalid URL');
   }
+  if (window.api?.openExternal && isElectron()) {
+    return window.api.openExternal(url);
+  }
   try {
     const { Browser } = await import('@capacitor/browser');
     await Browser.open({ url });
   } catch {
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 }
 
@@ -38,11 +46,7 @@ async function takePhotoNative() {
   const [header, b64] = photo.dataUrl.split(',');
   const mime = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
 
-  return {
-    base64: b64,
-    mimeType: mime,
-    previewSrc: photo.dataUrl,
-  };
+  return { base64: b64, mimeType: mime, previewSrc: photo.dataUrl };
 }
 
 async function pickPhotoNative() {
@@ -61,17 +65,26 @@ async function pickPhotoNative() {
   const [header, b64] = photo.dataUrl.split(',');
   const mime = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
 
-  return {
-    base64: b64,
-    mimeType: mime,
-    previewSrc: photo.dataUrl,
-  };
+  return { base64: b64, mimeType: mime, previewSrc: photo.dataUrl };
+}
+
+async function migrateElectronApiKey() {
+  if (!window.electronBridge?.exportLegacyApiKey) return;
+  if (storage.hasApiKeyLocal()) return;
+  try {
+    const legacyKey = await window.electronBridge.exportLegacyApiKey();
+    if (legacyKey) await storage.saveApiKey(legacyKey);
+  } catch {
+    /* ignore */
+  }
 }
 
 function createWebApi() {
   return {
     isNative: isNativePlatform(),
-    isIOS: isIOS(),
+    isIOS: window.Capacitor?.getPlatform?.() === 'ios',
+    isElectron: isElectron(),
+    isDesktop: isDesktop(),
     hasApiKey: () => storage.hasApiKeyLocal() || storage.hasApiKey(),
     getApiKey: () => storage.getApiKeyLocal() || storage.getApiKey(),
     getApiKeyLocal: () => storage.getApiKeyLocal(),
@@ -95,6 +108,11 @@ function createWebApi() {
       });
       return { result };
     },
+    findPrices: async (product) => {
+      const apiKey = storage.getApiKeyLocal() || (await storage.getApiKey());
+      if (!apiKey) throw new Error('API key not configured. Go to Settings → API.');
+      return findProductPrices(apiKey, product);
+    },
     openExternal,
     getHistory: () => storage.loadHistory(),
     getHistoryItem: (id) => storage.getHistoryItem(id),
@@ -104,24 +122,35 @@ function createWebApi() {
 }
 
 export async function initPlatformApi() {
-  if (window.api) return window.api;
+  await migrateElectronApiKey();
 
-  window.api = createWebApi();
+  const webApi = createWebApi();
+  const electronOpen = window.api?.isElectron ? window.api.openExternal : null;
+
+  window.api = {
+    ...webApi,
+    isElectron: !!electronOpen || webApi.isElectron,
+    openExternal: electronOpen || webApi.openExternal,
+  };
 
   if (window.Capacitor?.isNativePlatform?.()) {
     try {
       const { StatusBar, Style } = await import('@capacitor/status-bar');
       await StatusBar.setStyle({ style: Style.Dark });
     } catch {
-      // optional
+      /* optional */
     }
     try {
       const { Keyboard, KeyboardResize } = await import('@capacitor/keyboard');
       await Keyboard.setResizeMode({ mode: KeyboardResize.Body });
       await Keyboard.setScroll({ isDisabled: false });
     } catch {
-      // optional
+      /* optional */
     }
+  }
+
+  if (window.api.isElectron) {
+    document.documentElement.classList.add('platform-electron');
   }
 
   return window.api;

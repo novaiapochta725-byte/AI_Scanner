@@ -1,193 +1,78 @@
-const ANALYSIS_PROMPT = `You are a product identification expert. Analyze this product image.
+import { callGemini, parseJsonFromText, REQUEST_TIMEOUT_MS } from './gemini-client.js';
 
-Observe: brand logos, colors, camera layout, packaging text, materials.
-Return result as JSON only.
+const VISUAL_PROMPT = `You are an expert product identifier. Study this image carefully.
 
-CRITICAL: Return ONLY a single valid JSON object. No markdown. No extra text.
-All string values must be on one line. Escape quotes inside strings with backslash.
+LOOK FOR:
+- Brand logos, wordmarks, packaging text
+- Model numbers, SKU, barcodes, serial labels
+- Distinctive design: camera layout, ports, buttons, materials, colors
+- Size cues and category (phone, laptop, shoe, watch, appliance, etc.)
+
+Return ONLY one valid JSON object. No markdown. All strings on one line.
 
 {
-  "product_name": "Apple iPhone 17 Pro Max",
-  "brand": "Apple",
-  "category": "Smartphone",
-  "description": "Short 1-2 sentence description.",
-  "confidence": 90,
-  "search_query": "Apple iPhone 17 Pro Max orange buy price",
-  "alternatives": ["iPhone 17 Pro", "iPhone 16 Pro Max", "iPhone 17"]
+  "product_name": "Exact product name with model/variant",
+  "brand": "Brand",
+  "category": "Category",
+  "description": "1-2 sentence description of what you see.",
+  "confidence": 85,
+  "search_query": "brand model variant buy price",
+  "visual_clues": ["logo on box", "triple camera", "orange color"],
+  "alternatives": ["similar model 1", "similar model 2", "similar model 3"]
 }
 
 Rules:
-- Match camera module, lens count, color, edge design to a specific model.
-- confidence 85+ only when model is confirmed.
-- alternatives: 3 close variants.`;
+- Be specific: include model, generation, storage, color when visible
+- confidence 90+ only when model is clearly confirmed from visible text or unique design
+- confidence 60-85 when inferred from design without readable model text
+- search_query: optimized for Google Shopping / price search
+- alternatives: 3 close variants a shopper might confuse`;
 
-const STRUCTURED_PROMPT = `Analyze this product image and identify the exact model.
-Return ONLY valid JSON with keys: product_name, brand, category, description, confidence, search_query, alternatives.
-Keep all string values on one line.`;
+const SEARCH_ENRICH_PROMPT = `Confirm and refine this product identification using Google Search.
+
+Current guess:
+{GUESS}
+
+Return ONLY JSON with keys: product_name, brand, category, description, confidence, search_query, alternatives.
+Improve search_query for finding BUY prices online. Use latest model names from search.`;
 
 const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
-const REQUEST_TIMEOUT_MS = 45000;
 
-function parseApiError(status, errText, model) {
-  let detail = '';
-  try {
-    const data = JSON.parse(errText);
-    detail = data?.error?.message || '';
-  } catch {
-    detail = errText.slice(0, 300);
-  }
-
-  if (status === 429) {
-    return new Error(
-      'Gemini API quota exceeded (429).\n\n' +
-        '1. Create a new key at https://aistudio.google.com/apikey\n' +
-        '2. Check quota in AI Studio → Usage\n' +
-        '3. Enable billing in Google AI Studio'
-    );
-  }
-
-  if (status === 403) {
-    return new Error('Gemini API access denied (403). Check your API key.');
-  }
-
-  if (status === 400 && /country|billing|FAILED_PRECONDITION/i.test(detail)) {
-    return new Error('Free Gemini API is not available in your region. Enable billing in Google AI Studio.');
-  }
-
-  return new Error(`Gemini API (${model}): ${status} — ${detail.slice(0, 200)}`);
-}
-
-function buildRequestBody(imageBase64, mimeType, mode) {
-  const prompt = mode === 'search' ? ANALYSIS_PROMPT : STRUCTURED_PROMPT;
-  const body = {
+function buildVisualBody(imageBase64, mimeType) {
+  return {
     contents: [
       {
         parts: [
-          { text: prompt },
-          {
-            inline_data: {
-              mime_type: mimeType,
-              data: imageBase64,
-            },
-          },
+          { text: VISUAL_PROMPT },
+          { inline_data: { mime_type: mimeType, data: imageBase64 } },
         ],
       },
     ],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 1536,
+      responseMimeType: 'application/json',
     },
   };
-
-  if (mode === 'search') {
-    body.tools = [{ google_search: {} }];
-  } else {
-    body.generationConfig.responseMimeType = 'application/json';
-  }
-
-  return body;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      const e = new Error('Request timed out. Check your connection and try again.');
-      e.status = 408;
-      throw e;
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function callModel(apiKey, model, body) {
-  const response = await fetchWithTimeout(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+function buildSearchEnrichBody(guess) {
+  return {
+    contents: [
+      {
+        parts: [
+          {
+            text: SEARCH_ENRICH_PROMPT.replace('{GUESS}', JSON.stringify(guess)),
+          },
+        ],
       },
-      body: JSON.stringify(body),
-    }
-  );
-
-  const errText = await response.text();
-
-  if (!response.ok) {
-    const err = parseApiError(response.status, errText, model);
-    err.status = response.status;
-    throw err;
-  }
-
-  const data = JSON.parse(errText);
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    const err = new Error('Empty response from Gemini. Try a different photo.');
-    err.status = 502;
-    throw err;
-  }
-
-  return text;
-}
-
-function extractJsonBlock(text) {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '');
-  }
-
-  const start = cleaned.indexOf('{');
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-
-  for (let i = start; i < cleaned.length; i++) {
-    const ch = cleaned[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (ch === '\\' && inString) {
-      escape = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString) {
-      if (ch === '{') depth++;
-      if (ch === '}') {
-        depth--;
-        if (depth === 0) return cleaned.slice(start, i + 1);
-      }
-    }
-  }
-
-  return cleaned.slice(start);
-}
-
-function repairJson(jsonStr) {
-  let s = jsonStr.trim();
-  const quotes = (s.match(/(?<!\\)"/g) || []).length;
-  if (quotes % 2 === 1) s += '"';
-
-  const openBraces = (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
-  const openBrackets = (s.match(/\[/g) || []).length - (s.match(/\]/g) || []).length;
-
-  for (let i = 0; i < openBrackets; i++) s += ']';
-  for (let i = 0; i < openBraces; i++) s += '}';
-
-  return s;
+    ],
+    tools: [{ google_search: {} }],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 1536,
+    },
+  };
 }
 
 function parseLooseFields(text) {
@@ -229,6 +114,9 @@ function normalizeResult(parsed) {
     description: String(parsed.description || ''),
     confidence: Math.min(100, Math.max(0, Number(parsed.confidence) || 0)),
     search_query: String(parsed.search_query || parsed.product_name || ''),
+    visual_clues: Array.isArray(parsed.visual_clues)
+      ? parsed.visual_clues.slice(0, 5).map(String)
+      : [],
     alternatives: Array.isArray(parsed.alternatives)
       ? parsed.alternatives.slice(0, 3).map(String)
       : [],
@@ -236,59 +124,70 @@ function normalizeResult(parsed) {
 }
 
 function parseResult(text) {
-  const block = extractJsonBlock(text);
-  if (!block) {
+  try {
+    return normalizeResult(parseJsonFromText(text));
+  } catch {
     const loose = parseLooseFields(text);
     if (loose) return normalizeResult(loose);
-    throw new Error('Failed to parse Gemini response.');
+    throw new Error('Failed to parse Gemini response. Please try again.');
   }
-
-  const attempts = [block, repairJson(block)];
-
-  for (const candidate of attempts) {
-    try {
-      return normalizeResult(JSON.parse(candidate));
-    } catch {
-      // try next
-    }
-  }
-
-  const loose = parseLooseFields(text);
-  if (loose) return normalizeResult(loose);
-
-  throw new Error('Failed to parse Gemini response. Please try again.');
 }
 
-function isParseError(err) {
-  return err instanceof SyntaxError || err.message?.includes('parse Gemini');
-}
-
-function shouldTryNext(err, mode) {
-  if (isParseError(err)) return true;
-  if (err.status === 408) return true;
-  if (err.status === 400 && mode === 'search') return true;
-  if (err.status === 404 || err.status === 429) return false;
-  return false;
+function mergeResults(visual, enriched) {
+  if (!enriched) return visual;
+  if ((enriched.confidence || 0) >= (visual.confidence || 0)) {
+    return {
+      ...visual,
+      ...enriched,
+      visual_clues: visual.visual_clues,
+      confidence: Math.max(visual.confidence || 0, enriched.confidence || 0),
+    };
+  }
+  return {
+    ...visual,
+    search_query: enriched.search_query || visual.search_query,
+    alternatives: enriched.alternatives?.length ? enriched.alternatives : visual.alternatives,
+  };
 }
 
 export async function analyzeProduct(apiKey, imageBase64, mimeType) {
   let lastError = null;
+  let visualResult = null;
 
-  // JSON mode first — faster and more reliable on mobile; search is fallback only
   for (const model of MODELS) {
-    for (const mode of ['json', 'search']) {
-      try {
-        const body = buildRequestBody(imageBase64, mimeType, mode);
-        const text = await callModel(apiKey, model, body);
-        return parseResult(text);
-      } catch (err) {
-        lastError = err;
-        if (shouldTryNext(err, mode)) continue;
-        throw err;
-      }
+    try {
+      const text = await callGemini(apiKey, model, buildVisualBody(imageBase64, mimeType));
+      visualResult = parseResult(text);
+      break;
+    } catch (err) {
+      lastError = err;
+      if (err.status === 404 || err.status === 429) break;
     }
-    if (lastError?.status === 404 || lastError?.status === 429) break;
   }
 
-  throw lastError || new Error('All Gemini models unavailable. Check your API key and quota.');
+  if (!visualResult) {
+    throw lastError || new Error('Could not analyze image. Check API key.');
+  }
+
+  if (visualResult.confidence >= 88) {
+    return visualResult;
+  }
+
+  for (const model of MODELS) {
+    try {
+      const text = await callGemini(
+        apiKey,
+        model,
+        buildSearchEnrichBody(visualResult),
+        REQUEST_TIMEOUT_MS
+      );
+      const enriched = parseResult(text);
+      return mergeResults(visualResult, enriched);
+    } catch (err) {
+      lastError = err;
+      if (err.status === 404 || err.status === 429) break;
+    }
+  }
+
+  return visualResult;
 }
