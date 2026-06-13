@@ -70,7 +70,13 @@ export async function callGemini(apiKey, model, body, timeoutMs = REQUEST_TIMEOU
   }
 
   const data = JSON.parse(errText);
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts
+    .map((p) => p.text)
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+
   if (!text) {
     const err = new Error('Empty response from Gemini. Try again.');
     err.status = 502;
@@ -146,4 +152,30 @@ export function parseJsonFromText(text) {
     }
   }
   throw new Error('Failed to parse JSON response.');
+}
+
+/** Try hard to recover JSON object from messy / truncated model output */
+export function parseJsonLenient(text) {
+  try {
+    return parseJsonFromText(text);
+  } catch {
+    /* fall through */
+  }
+
+  const block = extractJsonBlock(text);
+  if (block) {
+    let slice = block;
+    for (let i = 0; i < 8; i++) {
+      try {
+        return JSON.parse(repairJson(slice));
+      } catch {
+        slice = slice.replace(/,?\s*"[^"]*"?\s*:\s*"[^"]*$/, '');
+        slice = slice.replace(/,?\s*"[^"]*"?\s*:\s*[\d.]+$/, '');
+        slice = slice.replace(/,?\s*\{[^}]*$/, '');
+        slice = slice.replace(/,?\s*"[^"]*"?\s*:\s*\[[^\]]*$/, '');
+      }
+    }
+  }
+
+  return null;
 }
