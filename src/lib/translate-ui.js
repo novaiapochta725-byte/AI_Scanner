@@ -151,6 +151,10 @@ export async function initTranslateUI() {
     window.showView?.('settings');
   });
 
+  window.onApiKeyChanged = (saved) => {
+    $('#translate-no-key')?.classList.toggle('hidden', saved);
+  };
+
   $('#translate-target-lang')?.addEventListener('change', persistSettings);
   $('#translate-echo')?.addEventListener('change', persistSettings);
   $('#translate-transcripts')?.addEventListener('change', async () => {

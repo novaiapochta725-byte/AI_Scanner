@@ -73,6 +73,7 @@ function createWebApi() {
     isNative: isNativePlatform(),
     isIOS: isIOS(),
     hasApiKey: () => storage.hasApiKey(),
+    getApiKey: () => storage.getApiKey(),
     getApiKeyStatus: () => storage.getApiKeyStatus(),
     saveApiKey: (key) => {
       if (!key || key.trim().length < 10) throw new Error('Invalid API key');

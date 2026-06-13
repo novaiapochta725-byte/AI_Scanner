@@ -1,4 +1,4 @@
-import { bindButton, blurActiveInput, scrollIntoView } from './lib/touch.js';
+import { bindButton, blurActiveInput, dismissKeyboard, scrollIntoView } from './lib/touch.js';
 import { initTranslateUI, stopTranslateIfRunning } from './lib/translate-ui.js';
 
 let currentImage = null;
@@ -319,7 +319,7 @@ function escapeHtml(str) {
 
 function initNavigation() {
   $$('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => showView(btn.dataset.view));
+    bindButton(btn, () => showView(btn.dataset.view));
   });
 }
 
@@ -327,6 +327,7 @@ function initUpload() {
   const fileInput = $('#file-input');
 
   bindButton($('#btn-upload'), async () => {
+    await dismissKeyboard();
     if (window.api.pickPhoto) {
       try {
         const data = await window.api.pickPhoto();
@@ -366,6 +367,7 @@ function initUpload() {
 
 function initCamera() {
   bindButton($('#btn-camera'), async () => {
+    await dismissKeyboard();
     if (window.api.takePhoto) {
       try {
         const data = await window.api.takePhoto();
@@ -380,8 +382,8 @@ function initCamera() {
     await startCamera();
   });
 
-  $('#btn-take-photo').addEventListener('click', takePhoto);
-  $('#btn-stop-camera').addEventListener('click', () => {
+  bindButton($('#btn-take-photo'), takePhoto);
+  bindButton($('#btn-stop-camera'), () => {
     stopCamera();
     if (!currentImage) $('#drop-zone')?.classList.remove('hidden');
   });
@@ -421,8 +423,13 @@ function initSettings() {
 
   window.updateSettingsStatus = updateSettingsStatus;
 
+  let savingKey = false;
+
   async function saveApiKey() {
-    blurActiveInput();
+    if (savingKey) return;
+    savingKey = true;
+
+    await dismissKeyboard();
     const key = $('#api-key-input').value.trim();
     const status = $('#settings-status');
     const btn = $('#btn-save-key');
@@ -431,6 +438,7 @@ function initSettings() {
       status.textContent = 'Please enter an API key.';
       status.classList.add('error');
       scrollIntoView(status);
+      savingKey = false;
       return;
     }
 
@@ -438,17 +446,21 @@ function initSettings() {
     try {
       await window.api.saveApiKey(key);
       $('#api-key-input').value = '';
-      status.textContent = '✓ API key saved successfully!';
-      status.classList.remove('error');
       await updateSettingsStatus();
+      status.classList.remove('error');
+      if (!status.textContent) {
+        status.textContent = '✓ API key saved successfully!';
+      }
       scrollIntoView(status);
-      await hapticSuccess();
+      void hapticSuccess();
+      window.onApiKeyChanged?.(true);
     } catch (err) {
       status.textContent = err.message || 'Failed to save key.';
       status.classList.add('error');
       scrollIntoView(status);
     } finally {
       setButtonLoading(btn, false);
+      savingKey = false;
     }
   }
 
@@ -457,27 +469,29 @@ function initSettings() {
   $('#api-key-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      saveApiKey();
+      void saveApiKey();
     }
   });
 
   bindButton($('#btn-reset-key'), async () => {
     if (!confirm('Remove saved API key?')) return;
+    await dismissKeyboard();
     await window.api.resetApiKey();
     $('#api-key-input').value = '';
     await updateSettingsStatus();
     $('#settings-status').textContent = 'API key removed.';
     $('#settings-status').classList.remove('error');
+    window.onApiKeyChanged?.(false);
   });
 
-  $('#link-aistudio').addEventListener('click', (e) => {
+  bindButton($('#link-aistudio'), (e) => {
     e.preventDefault();
     window.api.openExternal('https://aistudio.google.com/apikey');
   });
 }
 
 function initError() {
-  $('#btn-go-settings').addEventListener('click', () => showView('settings'));
+  bindButton($('#btn-go-settings'), () => showView('settings'));
 }
 
 export async function initApp() {
