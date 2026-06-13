@@ -1,0 +1,20 @@
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+
+# iOS / Xcode
+ios/App/Pods/
+ios/App/App/public/
+ios/App/DerivedData/
+*.xcuserstate
+*.xcuserdata
+
+# macOS
+.DS_Store
+
+# Signing
+*.p12
+*.mobileprovision
