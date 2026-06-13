@@ -154,7 +154,7 @@ function renderPrices(prices) {
       const linkBtn = document.createElement('button');
       linkBtn.type = 'button';
       linkBtn.className = 'btn btn-ghost btn-sm price-offer-link';
-      linkBtn.textContent = offer.url.includes('google') ? 'Search' : 'Open';
+      linkBtn.textContent = 'View listing';
       bindButton(linkBtn, () => window.api.openExternal(offer.url));
       li.appendChild(linkBtn);
     }

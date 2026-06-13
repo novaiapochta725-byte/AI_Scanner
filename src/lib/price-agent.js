@@ -1,9 +1,9 @@
 import { callGeminiFull, parseJsonLenient, PRICE_TIMEOUT_MS } from './gemini-client.js';
 import { getRegion } from './regions.js';
 import {
-  buildStoreSearchUrl,
   extractGroundingLinks,
-  resolveOfferUrl,
+  formatSourcesCatalog,
+  resolveProductListingUrl,
 } from './shopping-urls.js';
 
 const PRICE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
@@ -14,41 +14,47 @@ function buildPricePrompt(product, region, compact = false) {
   const query = product.search_query || name;
   const stores = region.stores.join(', ');
 
-  const jsonExample = `{"currency":"${region.currency}","offers":[{"store":"${region.stores[0]}","title":"listing","price":99.99,"price_display":"${region.symbol}99.99","condition":"new","shipping":"free"}],"best_deal":{"store":"${region.stores[0]}","price":99.99,"price_display":"${region.symbol}99.99","reason":"why best"},"search_summary":"one line"}`;
+  const jsonExample = `{"currency":"${region.currency}","offers":[{"store":"${region.stores[0]}","title":"exact listing title","price":99.99,"price_display":"${region.symbol}99.99","condition":"new","shipping":"free","source_index":0,"source_title":"amazon.co.uk - product name"}],"best_deal":{"store":"${region.stores[0]}","price":99.99,"price_display":"${region.symbol}99.99","source_index":0,"reason":"why best"},"search_summary":"one line"}`;
+
+  const rules = `
+CRITICAL RULES:
+- Each offer MUST be a SPECIFIC product listing from Google Search (not a store homepage or search page).
+- Each offer MUST include "source_index": integer — the search result number for that exact listing.
+- Each offer MUST include "source_title": the search result title for that listing.
+- price must match the price shown on that listing.
+- Do NOT invent URLs. Do NOT include "url" field.
+- Skip offers without a specific product page in search results.
+- currency="${region.currency}", all prices in ${region.symbol}.`;
 
   if (compact) {
-    return `Search Google (${region.googleDomain}) for current BUY prices in ${region.name}.
+    return `Search Google (${region.googleDomain}) for BUY prices in ${region.name}.
 ${region.searchHint}
 Product: ${name} (${brand})
+Query: ${query} buy price ${region.name}
 Stores: ${stores}
-Query: ${query} price ${region.name}
 
-Return ONLY minified JSON. currency="${region.currency}". All prices in ${region.symbol}.
-Do NOT invent URLs — omit the "url" field entirely.
+Return ONLY minified JSON:
 ${jsonExample}
-Need 5-8 offers sorted by price ascending.`;
+${rules}
+Need 5-8 offers with valid source_index, sorted by price.`;
   }
 
   return `You are a price comparison agent for ${region.name}.
-Use Google Search (${region.googleDomain}) for REAL current local prices.
+Use Google Search (${region.googleDomain}) to find SPECIFIC product listing pages with prices.
 
 Product: ${name}
 Brand: ${brand}
 Search: ${query}
+Stores: ${stores}
 
-Find 5-8 offers from: ${stores}
-All prices MUST be in ${region.currency} (${region.symbol}).
-Pick best_deal (best value: new + trusted local seller + shipping).
+Find 5-8 specific product listings. Pick best_deal from listings with direct product pages.
 
-CRITICAL: Output ONLY raw JSON. No markdown. No "url" field — we link separately.
-Start with { and end with }.
-
+Output ONLY raw JSON. No markdown.
 ${jsonExample}
-
-Rules: price=numeric, price_display with ${region.symbol}, 5-8 offers ascending by price.`;
+${rules}`;
 }
 
-function parsePriceNumber(value, symbol) {
+function parsePriceNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
   let cleaned = value.replace(/[^\d.,]/g, '');
@@ -74,41 +80,39 @@ function formatPrice(price, region, display) {
   }
 }
 
-function normalizeOffer(raw, index, region, searchQuery, groundingLinks) {
-  const price = parsePriceNumber(raw?.price ?? raw?.price_display, region.symbol);
-  const base = {
+function normalizeOffer(raw, index, region, groundingLinks) {
+  const price = parsePriceNumber(raw?.price ?? raw?.price_display);
+  const offer = {
     store: String(raw?.store || `Store ${index + 1}`).slice(0, 80),
     title: String(raw?.title || raw?.store || '').slice(0, 200),
     price,
     price_display: formatPrice(price, region, raw?.price_display),
     condition: String(raw?.condition || 'unknown').slice(0, 30),
     shipping: String(raw?.shipping || 'unknown').slice(0, 20),
+    source_index: raw?.source_index ?? raw?.sourceIndex,
+    source_title: String(raw?.source_title || raw?.sourceTitle || '').slice(0, 200),
     url: null,
-    _index: index,
   };
-  base.url = resolveOfferUrl(
-    { ...base, url: raw?.url },
-    groundingLinks,
-    searchQuery,
-    region.code
-  );
-  delete base._index;
-  return base;
+
+  offer.url = resolveProductListingUrl(offer, groundingLinks);
+  return offer;
 }
 
-function normalizePriceResult(parsed, region, product, groundingLinks) {
-  const searchQuery = product.search_query || product.product_name;
-  const offers = (Array.isArray(parsed?.offers) ? parsed.offers : [])
-    .map((o, i) => normalizeOffer(o, i, region, searchQuery, groundingLinks))
-    .filter((o) => o.price != null)
+function normalizePriceResult(parsed, region, groundingLinks) {
+  const rawOffers = Array.isArray(parsed?.offers) ? parsed.offers : [];
+  const offers = rawOffers
+    .map((o, i) => normalizeOffer(o, i, region, groundingLinks))
+    .filter((o) => o.price != null && o.url)
     .sort((a, b) => a.price - b.price)
     .slice(0, 10);
 
-  let best = parsed?.best_deal
-    ? normalizeOffer(parsed.best_deal, 0, region, searchQuery, groundingLinks)
-    : null;
-  if (!best?.price && offers.length) {
-    best = { ...offers[0], reason: 'Lowest price found' };
+  let best = null;
+  if (parsed?.best_deal) {
+    const candidate = normalizeOffer(parsed.best_deal, 0, region, groundingLinks);
+    if (candidate.price && candidate.url) best = candidate;
+  }
+  if (!best && offers.length) {
+    best = { ...offers[0], reason: 'Lowest price with direct product link' };
   }
   if (best?.price && !best.reason) {
     best.reason = String(parsed?.best_deal?.reason || 'Best overall value').slice(0, 300);
@@ -118,71 +122,100 @@ function normalizePriceResult(parsed, region, product, groundingLinks) {
     region: region.code,
     currency: region.currency,
     offers,
-    best_deal: best?.price ? best : null,
+    best_deal: best?.price && best?.url ? best : null,
     search_summary: String(parsed?.search_summary || '').slice(0, 500),
   };
 }
 
-function extractOffersLoose(text) {
-  const offers = [];
-  const re =
-    /\{[^{}]*"store"\s*:\s*"((?:[^"\\]|\\.)*)"[^{}]*"price"\s*:\s*([\d.]+)/gi;
+async function mapOffersToSources(apiKey, model, rawOffers, groundingLinks) {
+  if (!rawOffers.length || !groundingLinks.length) return rawOffers;
 
-  let m;
-  while ((m = re.exec(text)) !== null && offers.length < 10) {
-    offers.push({
-      store: m[1].replace(/\\"/g, '"'),
-      price: m[2],
-    });
-  }
-  return offers;
-}
+  const catalog = formatSourcesCatalog(groundingLinks);
+  const prompt = `Match each offer to the search result index of the EXACT product listing page.
 
-function parsePriceResponse(text, region, product, groundingLinks) {
-  let parsed = parseJsonLenient(text);
-  if (parsed?.offers?.length) {
-    const result = normalizePriceResult(parsed, region, product, groundingLinks);
-    if (result.offers.length) return result;
-  }
+Search results:
+${catalog}
 
-  parsed = parseJsonLenient(text.replace(/[\u201c\u201d]/g, '"'));
-  if (parsed?.offers?.length) {
-    const result = normalizePriceResult(parsed, region, product, groundingLinks);
-    if (result.offers.length) return result;
-  }
+Offers:
+${JSON.stringify(
+  rawOffers.map((o, i) => ({
+    offer_index: i,
+    store: o.store,
+    title: o.title,
+    price: o.price,
+  }))
+)}
 
-  const looseOffers = extractOffersLoose(text);
-  if (looseOffers.length) {
-    return normalizePriceResult(
-      { currency: region.currency, offers: looseOffers, search_summary: 'Recovered from partial response' },
-      region,
-      product,
-      groundingLinks
+Return ONLY JSON:
+{"mappings":[{"offer_index":0,"source_index":2,"source_title":"copied result title"}]}
+
+Rules: only map when the search result is the specific product page for that price. Skip uncertain matches.`;
+
+  try {
+    const { text } = await callGeminiFull(
+      apiKey,
+      model,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 2048,
+          responseMimeType: 'application/json',
+        },
+      },
+      25000
     );
-  }
 
-  throw new Error('Could not read prices from response. Tap Retry.');
+    const parsed = parseJsonLenient(text);
+    const mappings = Array.isArray(parsed?.mappings) ? parsed.mappings : [];
+
+    return rawOffers.map((offer, i) => {
+      const map = mappings.find((m) => Number(m.offer_index) === i);
+      if (!map) return offer;
+      return {
+        ...offer,
+        source_index: map.source_index,
+        source_title: map.source_title || offer.source_title,
+      };
+    });
+  } catch {
+    return rawOffers;
+  }
 }
 
-async function callPriceSearch(apiKey, model, product, region, { useSearch, compact }) {
-  const prompt = buildPricePrompt(product, region, compact);
+async function callPriceSearch(apiKey, model, product, region, { compact }) {
   const body = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ parts: [{ text: buildPricePrompt(product, region, compact) }] }],
+    tools: [{ google_search: {} }],
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: 8192,
     },
   };
 
-  if (useSearch) {
-    body.tools = [{ google_search: {} }];
-  } else {
-    body.generationConfig.responseMimeType = 'application/json';
-  }
-
   const { text, groundingChunks } = await callGeminiFull(apiKey, model, body, PRICE_TIMEOUT_MS);
   const groundingLinks = extractGroundingLinks(groundingChunks);
-  return parsePriceResponse(text, region, product, groundingLinks);
+
+  if (!groundingLinks.length) {
+    throw new Error('No product pages found in search. Tap Retry.');
+  }
+
+  let parsed = parseJsonLenient(text);
+  if (!parsed?.offers?.length) {
+    parsed = parseJsonLenient(text.replace(/[\u201c\u201d]/g, '"'));
+  }
+  if (!parsed?.offers?.length) {
+    throw new Error('Could not read prices from response. Tap Retry.');
+  }
+
+  let result = normalizePriceResult(parsed, region, groundingLinks);
+
+  if (result.offers.length < 3) {
+    const remapped = await mapOffersToSources(apiKey, model, parsed.offers, groundingLinks);
+    result = normalizePriceResult({ ...parsed, offers: remapped }, region, groundingLinks);
+  }
+
+  return result;
 }
 
 export async function findProductPrices(apiKey, product, regionCode = 'GB') {
@@ -192,25 +225,21 @@ export async function findProductPrices(apiKey, product, regionCode = 'GB') {
 
   const region = getRegion(regionCode);
   let lastError = null;
-  const attempts = [
-    { useSearch: true, compact: true },
-    { useSearch: true, compact: false },
-    { useSearch: false, compact: true },
-  ];
+  const attempts = [{ compact: false }, { compact: true }];
 
   for (const model of PRICE_MODELS) {
     for (const mode of attempts) {
       try {
         const result = await callPriceSearch(apiKey, model, product, region, mode);
         if (!result.offers.length) {
-          throw new Error('No prices found. Try again or search manually.');
+          throw new Error('No product listing links found. Tap Retry.');
         }
         return result;
       } catch (err) {
         lastError = err;
         const msg = err.message || '';
         if (err.status === 404 || err.status === 429) break;
-        if (/parse|JSON|read prices/i.test(msg)) continue;
+        if (/parse|JSON|read prices|listing links|product pages/i.test(msg)) continue;
         if (err.status === 408) continue;
       }
     }

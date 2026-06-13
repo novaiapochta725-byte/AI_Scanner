@@ -20,14 +20,6 @@ const STORE_BUILDERS = [
   { match: /john\s*lewis/i, build: (query) => `https://www.johnlewis.com/search?term=${q(query)}` },
   { match: /ao\.?com|ao com/i, build: (query) => `https://www.ao.com/search?search=${q(query)}` },
   { match: /\bvery\b/i, build: (query) => `https://www.very.co.uk/search/${q(query)}` },
-  { match: /walmart/i, build: (query) => `https://www.walmart.com/search?q=${q(query)}` },
-  { match: /best\s*buy/i, build: (query) => `https://www.bestbuy.com/site/searchpage.jsp?st=${q(query)}` },
-  { match: /target/i, build: (query) => `https://www.target.com/s?searchTerm=${q(query)}` },
-  { match: /mediamarkt|media markt/i, build: (query) => `https://www.mediamarkt.de/de/search.html?query=${q(query)}` },
-  { match: /saturn/i, build: (query) => `https://www.saturn.de/de/search.html?query=${q(query)}` },
-  { match: /ozon/i, build: (query) => `https://www.ozon.ru/search/?text=${q(query)}` },
-  { match: /wildberries/i, build: (query) => `https://www.wildberries.ru/catalog/0/search.aspx?search=${q(query)}` },
-  { match: /yandex/i, build: (query) => `https://market.yandex.ru/search?text=${q(query)}` },
 ];
 
 export function buildStoreSearchUrl(store, searchQuery, regionCode) {
@@ -50,47 +42,82 @@ export function buildGoogleShoppingUrl(searchQuery, regionCode) {
   return `https://www.${domain}/search?q=${q(searchQuery)}&tbm=shop`;
 }
 
-function domainFromChunk(chunk) {
-  const title = (chunk.web?.title || '').toLowerCase();
-  const uri = (chunk.web?.uri || '').toLowerCase();
-  return `${title} ${uri}`;
+function tokenize(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
 }
 
-function storeMatchesChunk(store, chunk) {
-  const blob = domainFromChunk(chunk);
-  const s = store.toLowerCase();
+function storeMatchesChunk(store, link) {
+  const blob = `${link.title || ''} ${link.uri || ''}`.toLowerCase();
+  const s = String(store || '').toLowerCase();
   if (/amazon/i.test(s) && /amazon/i.test(blob)) return true;
   if (/ebay/i.test(s) && /ebay/i.test(blob)) return true;
   if (/argos/i.test(s) && /argos/i.test(blob)) return true;
   if (/currys/i.test(s) && /currys/i.test(blob)) return true;
   if (/john\s*lewis/i.test(s) && /johnlewis/i.test(blob)) return true;
-  if (/ao/i.test(s) && /ao\.com|ao.com/i.test(blob)) return true;
-  if (/very/i.test(s) && /very\.co\.uk|very.com/i.test(blob)) return true;
-  if (/walmart/i.test(s) && /walmart/i.test(blob)) return true;
-  if (/best\s*buy/i.test(s) && /bestbuy/i.test(blob)) return true;
-  if (/ozon/i.test(s) && /ozon/i.test(blob)) return true;
-  if (/wildberries/i.test(s) && /wildberries/i.test(blob)) return true;
+  if (/ao/i.test(s) && /ao\.com/i.test(blob)) return true;
+  if (/very/i.test(s) && /very\.co/i.test(blob)) return true;
   return false;
 }
 
 export function extractGroundingLinks(chunks) {
   return (chunks || [])
-    .map((chunk) => ({
-      uri: chunk.web?.uri || null,
-      title: chunk.web?.title || '',
+    .map((chunk, index) => ({
+      index,
+      uri: chunk.web?.uri || chunk.retrievedContext?.uri || null,
+      title: chunk.web?.title || chunk.retrievedContext?.title || '',
     }))
     .filter((c) => c.uri && c.uri.startsWith('https://'));
 }
 
-export function resolveOfferUrl(offer, groundingLinks, searchQuery, regionCode) {
+/** Match offer to a specific product listing URL from Google Search grounding */
+export function findBestListingMatch(offer, groundingLinks) {
+  if (!groundingLinks?.length) return null;
+
+  const sourceIdx = Number(offer.source_index ?? offer.sourceIndex);
+  if (Number.isInteger(sourceIdx) && sourceIdx >= 0 && groundingLinks[sourceIdx]?.uri) {
+    return groundingLinks[sourceIdx];
+  }
+
+  const offerWords = tokenize(`${offer.title} ${offer.store}`);
+  const sourceTitle = String(offer.source_title || offer.sourceTitle || '').toLowerCase();
+
+  let best = null;
+  let bestScore = 0;
+
   for (const link of groundingLinks) {
-    if (storeMatchesChunk(offer.store, { web: link })) {
-      return link.uri;
+    let score = 0;
+    const chunkTitle = (link.title || '').toLowerCase();
+
+    if (sourceTitle && chunkTitle.includes(sourceTitle)) score += 8;
+    if (sourceTitle && sourceTitle.includes(chunkTitle.slice(0, 20))) score += 5;
+
+    if (storeMatchesChunk(offer.store, link)) score += 4;
+
+    for (const word of offerWords) {
+      if (chunkTitle.includes(word)) score += 1.5;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = link;
     }
   }
 
-  const idx = offer._index ?? 0;
-  if (groundingLinks[idx]?.uri) return groundingLinks[idx].uri;
+  return bestScore >= 4 ? best : null;
+}
 
-  return buildStoreSearchUrl(offer.store, searchQuery, regionCode);
+/** Product listing URL only — never a generic store search page */
+export function resolveProductListingUrl(offer, groundingLinks) {
+  const match = findBestListingMatch(offer, groundingLinks);
+  return match?.uri || null;
+}
+
+export function formatSourcesCatalog(groundingLinks) {
+  return groundingLinks
+    .map((l, i) => `[${i}] ${l.title || 'Search result'}`)
+    .join('\n');
 }
