@@ -1,6 +1,13 @@
 const API_KEY_STORAGE = 'gemini_api_key';
 const HISTORY_STORAGE = 'scan_history';
+const TRANSLATE_SETTINGS_KEY = 'translate_settings';
 const MAX_HISTORY = 20;
+
+const DEFAULT_TRANSLATE_SETTINGS = {
+  targetLanguage: 'ru',
+  echoTargetLanguage: true,
+  showTranscripts: true,
+};
 
 async function getPrefs() {
   if (!window.Capacitor?.isNativePlatform?.()) return null;
@@ -115,4 +122,20 @@ export async function addToHistory({ imageBase64, mimeType, result }) {
 
 export async function getHistoryItem(id) {
   return (await loadHistory()).find((item) => item.id === id) || null;
+}
+
+export async function getTranslateSettings() {
+  try {
+    const raw = await read(TRANSLATE_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_TRANSLATE_SETTINGS };
+    return { ...DEFAULT_TRANSLATE_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_TRANSLATE_SETTINGS };
+  }
+}
+
+export async function saveTranslateSettings(settings) {
+  const merged = { ...DEFAULT_TRANSLATE_SETTINGS, ...settings };
+  await write(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
+  return merged;
 }

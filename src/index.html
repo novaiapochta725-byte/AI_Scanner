@@ -11,7 +11,7 @@
   <meta name="theme-color" content="#0f1117" />
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'self' capacitor: ionic: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: capacitor: ionic: https:; media-src 'self' blob:; connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;"
+    content="default-src 'self' capacitor: ionic: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: capacitor: ionic: https:; media-src 'self' blob:; connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://*.googleapis.com;"
   />
   <title>AI Product Scanner</title>
   <link rel="stylesheet" href="styles.css" />
@@ -115,6 +115,52 @@
         </div>
       </section>
 
+      <!-- TRANSLATE VIEW -->
+      <section id="view-translate" class="view">
+        <h2 class="page-title">Live Translate</h2>
+        <p id="translate-subtitle" class="subtitle">Gemini 3.5 — речь в речь, 70+ языков</p>
+
+        <div id="translate-no-key" class="translate-banner">
+          <p>Нужен Gemini API key. Добавьте в Settings.</p>
+          <button type="button" id="btn-translate-settings" class="btn btn-secondary btn-sm">Settings</button>
+        </div>
+
+        <div class="settings-card translate-settings">
+          <label for="translate-target-lang">Переводить на</label>
+          <select id="translate-target-lang" class="translate-select"></select>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="translate-echo" checked />
+            <span>Повторять, если уже на целевом языке</span>
+          </label>
+          <p class="settings-hint">echoTargetLanguage — модель озвучит речь, если вы уже говорите на выбранном языке.</p>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="translate-transcripts" checked />
+            <span>Показывать текст (транскрипты)</span>
+          </label>
+        </div>
+
+        <div id="translate-status" class="translate-status" data-state="idle">Готов к переводу</div>
+
+        <button type="button" id="btn-translate-toggle" class="btn btn-accent btn-translate-main">
+          ▶ Начать перевод
+        </button>
+
+        <div id="translate-transcript-panel" class="translate-transcripts">
+          <div class="transcript-box">
+            <h4>Вы сказали</h4>
+            <div id="translate-input-log" class="transcript-log"></div>
+          </div>
+          <div class="transcript-box">
+            <h4>Перевод</h4>
+            <div id="translate-output-log" class="transcript-log"></div>
+          </div>
+        </div>
+
+        <p class="translate-hint">🎧 Наденьте наушники. Говорите — перевод с задержкой ~2–3 сек. Только аудио (не текст).</p>
+      </section>
+
       <!-- SETTINGS VIEW -->
       <section id="view-settings" class="view">
         <h2 class="page-title">Settings</h2>
@@ -153,6 +199,10 @@
       <button class="tab-btn" data-view="history" aria-label="History">
         <span class="tab-icon" aria-hidden="true">🕐</span>
         <span class="tab-label">History</span>
+      </button>
+      <button class="tab-btn" data-view="translate" aria-label="Translate">
+        <span class="tab-icon" aria-hidden="true">🌐</span>
+        <span class="tab-label">Translate</span>
       </button>
       <button class="tab-btn" data-view="settings" aria-label="Settings">
         <span class="tab-icon" aria-hidden="true">⚙️</span>

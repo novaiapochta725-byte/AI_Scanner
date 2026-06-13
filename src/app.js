@@ -1,4 +1,5 @@
 import { bindButton, blurActiveInput, scrollIntoView } from './lib/touch.js';
+import { initTranslateUI, stopTranslateIfRunning } from './lib/translate-ui.js';
 
 let currentImage = null;
 let currentResult = null;
@@ -32,6 +33,8 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 function showView(name) {
+  if (name !== 'translate') stopTranslateIfRunning();
+
   $$('.view').forEach((v) => {
     v.classList.remove('active');
     v.classList.remove('hidden');
@@ -478,6 +481,7 @@ function initError() {
 }
 
 export async function initApp() {
+  window.showView = showView;
   initNavigation();
   initUpload();
   initCamera();
@@ -485,6 +489,7 @@ export async function initApp() {
   initSearch();
   initSettings();
   initError();
+  await initTranslateUI();
   showResultState('empty');
 
   const hasKey = await window.api.hasApiKey();
