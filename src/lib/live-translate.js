@@ -179,14 +179,17 @@ export class LiveTranslateSession {
         this.ws.send(JSON.stringify({
           setup: {
             model: `models/${MODEL}`,
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
             generationConfig: {
               responseModalities: ['AUDIO'],
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
               translationConfig: {
                 targetLanguageCode: this.targetLanguageCode,
                 echoTargetLanguage: this.echoTargetLanguage,
               },
+            },
+            realtimeInputConfig: {
+              automaticActivityDetection: { disabled: false },
             },
           },
         }));
@@ -208,7 +211,7 @@ export class LiveTranslateSession {
         }
 
         if (data.error) {
-          const msg = data.error.message || JSON.stringify(data.error);
+          const msg = data.error.message || data.error.details?.[0]?.message || JSON.stringify(data.error);
           this.onError(new Error(msg));
           if (!this.setupDone) finishConnect(new Error(msg));
           return;
