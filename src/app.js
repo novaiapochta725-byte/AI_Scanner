@@ -444,7 +444,12 @@ function initSettings() {
 
     setButtonLoading(btn, true, 'Saving…');
     try {
-      await window.api.saveApiKey(key);
+      await Promise.race([
+        window.api.saveApiKey(key),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Save timed out. Try again.')), 5000);
+        }),
+      ]);
       $('#api-key-input').value = '';
       await updateSettingsStatus();
       status.classList.remove('error');

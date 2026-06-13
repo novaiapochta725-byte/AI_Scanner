@@ -9,65 +9,49 @@ const DEFAULT_TRANSLATE_SETTINGS = {
   showTranscripts: true,
 };
 
+let prefsModule = null;
+let prefsUnavailable = false;
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('timeout')), ms);
+    }),
+  ]);
+}
+
 async function getPrefs() {
-  if (!window.Capacitor?.isNativePlatform?.()) return null;
+  if (prefsUnavailable || !window.Capacitor?.isNativePlatform?.()) return null;
+  if (prefsModule) return prefsModule;
   try {
-    const { Preferences } = await import('@capacitor/preferences');
-    return Preferences;
+    const mod = await withTimeout(import('@capacitor/preferences'), 1500);
+    prefsModule = mod.Preferences;
+    return prefsModule;
+  } catch {
+    prefsUnavailable = true;
+    return null;
+  }
+}
+
+function readLocal(key) {
+  try {
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-async function read(key) {
-  let fromPrefs = null;
-  try {
-    const Prefs = await getPrefs();
-    if (Prefs) {
-      const { value } = await Prefs.get({ key });
-      if (value != null) fromPrefs = value;
-    }
-  } catch (err) {
-    console.warn('Preferences read failed', err);
-  }
-
-  let fromLocal = null;
-  try {
-    fromLocal = localStorage.getItem(key);
-  } catch {
-    /* ignore */
-  }
-
-  return fromPrefs ?? fromLocal;
-}
-
-async function write(key, value) {
-  let prefsOk = false;
-  try {
-    const Prefs = await getPrefs();
-    if (Prefs) {
-      await Prefs.set({ key, value });
-      prefsOk = true;
-    }
-  } catch (err) {
-    console.warn('Preferences write failed', err);
-  }
-
+function writeLocal(key, value) {
   try {
     localStorage.setItem(key, value);
-  } catch (err) {
-    if (!prefsOk) throw new Error('Could not save data locally.');
-    console.warn('localStorage write failed (Preferences ok)', err);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-async function remove(key) {
-  try {
-    const Prefs = await getPrefs();
-    if (Prefs) await Prefs.remove({ key });
-  } catch (err) {
-    console.warn('Preferences remove failed', err);
-  }
+function removeLocal(key) {
   try {
     localStorage.removeItem(key);
   } catch {
@@ -75,45 +59,81 @@ async function remove(key) {
   }
 }
 
-async function verifyStored(key, expected, attempts = 6) {
-  for (let i = 0; i < attempts; i++) {
-    const check = await read(key);
-    if (check === expected) return true;
-    await new Promise((r) => setTimeout(r, 40 * (i + 1)));
+async function read(key) {
+  const local = readLocal(key);
+  if (local != null) return local;
+
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) {
+      const { value } = await withTimeout(Prefs.get({ key }), 1500);
+      if (value != null) {
+        writeLocal(key, value);
+        return value;
+      }
+    }
+  } catch {
+    /* Preferences optional */
   }
-  return false;
+  return null;
+}
+
+async function write(key, value) {
+  if (!writeLocal(key, value)) {
+    throw new Error('Could not save data locally.');
+  }
+
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) {
+      await withTimeout(Prefs.set({ key, value }), 2000);
+    }
+  } catch {
+    /* localStorage is source of truth */
+  }
+}
+
+async function remove(key) {
+  removeLocal(key);
+  try {
+    const Prefs = await getPrefs();
+    if (Prefs) await withTimeout(Prefs.remove({ key }), 1500);
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function saveApiKey(apiKey) {
-  await write(API_KEY_STORAGE, apiKey);
-  const ok = await verifyStored(API_KEY_STORAGE, apiKey);
-  if (!ok) {
+  writeLocal(API_KEY_STORAGE, apiKey);
+  if (readLocal(API_KEY_STORAGE) !== apiKey) {
     throw new Error('Could not save API key. Try again.');
   }
+  void write(API_KEY_STORAGE, apiKey);
 }
 
 export async function getApiKey() {
-  return (await read(API_KEY_STORAGE)) || null;
+  return readLocal(API_KEY_STORAGE) || (await read(API_KEY_STORAGE)) || null;
 }
 
 export async function hasApiKey() {
-  return !!(await getApiKey());
+  return !!readLocal(API_KEY_STORAGE) || !!(await read(API_KEY_STORAGE));
 }
 
 export async function getApiKeyStatus() {
-  const key = await getApiKey();
+  const key = readLocal(API_KEY_STORAGE) || (await read(API_KEY_STORAGE));
   if (!key) return { saved: false, masked: null };
   const masked = key.length <= 8 ? '••••••••' : `${key.slice(0, 4)}••••${key.slice(-4)}`;
   return { saved: true, masked };
 }
 
 export async function resetApiKey() {
-  await remove(API_KEY_STORAGE);
+  removeLocal(API_KEY_STORAGE);
+  void remove(API_KEY_STORAGE);
 }
 
 export async function loadHistory() {
   try {
-    const raw = await read(HISTORY_STORAGE);
+    const raw = readLocal(HISTORY_STORAGE) || (await read(HISTORY_STORAGE));
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -144,7 +164,7 @@ export async function getHistoryItem(id) {
 
 export async function getTranslateSettings() {
   try {
-    const raw = await read(TRANSLATE_SETTINGS_KEY);
+    const raw = readLocal(TRANSLATE_SETTINGS_KEY) || (await read(TRANSLATE_SETTINGS_KEY));
     if (!raw) return { ...DEFAULT_TRANSLATE_SETTINGS };
     return { ...DEFAULT_TRANSLATE_SETTINGS, ...JSON.parse(raw) };
   } catch {

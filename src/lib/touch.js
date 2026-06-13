@@ -55,12 +55,14 @@ export async function dismissKeyboard() {
   if (window.Capacitor?.isNativePlatform?.()) {
     try {
       const { Keyboard } = await import('@capacitor/keyboard');
-      await Keyboard.hide();
+      await Promise.race([
+        Keyboard.hide(),
+        new Promise((r) => setTimeout(r, 400)),
+      ]);
     } catch {
       /* optional */
     }
   }
-  // WKWebView sometimes leaves a stale viewport after keyboard dismiss
   requestAnimationFrame(() => {
     window.scrollTo(0, 0);
   });
