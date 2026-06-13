@@ -72,8 +72,10 @@ function createWebApi() {
   return {
     isNative: isNativePlatform(),
     isIOS: isIOS(),
-    hasApiKey: () => storage.hasApiKey(),
-    getApiKey: () => storage.getApiKey(),
+    hasApiKey: () => storage.hasApiKeyLocal() || storage.hasApiKey(),
+    getApiKey: () => storage.getApiKeyLocal() || storage.getApiKey(),
+    getApiKeyLocal: () => storage.getApiKeyLocal(),
+    hasApiKeyLocal: () => storage.hasApiKeyLocal(),
     getApiKeyStatus: () => storage.getApiKeyStatus(),
     saveApiKey: (key) => {
       if (!key || key.trim().length < 10) throw new Error('Invalid API key');
@@ -85,11 +87,13 @@ function createWebApi() {
         mimeType = imageBase64.mimeType;
         imageBase64 = imageBase64.imageBase64;
       }
-      const apiKey = await storage.getApiKey();
+      const apiKey = storage.getApiKeyLocal() || (await storage.getApiKey());
       if (!apiKey) throw new Error('API key not configured. Go to Settings → API.');
       const result = await analyzeProduct(apiKey, imageBase64, mimeType);
-      const entry = await storage.addToHistory({ imageBase64, mimeType, result });
-      return { result, historyId: entry.id };
+      void storage.addToHistory({ imageBase64, mimeType, result }).catch((err) => {
+        console.warn('History save failed', err);
+      });
+      return { result };
     },
     openExternal,
     getHistory: () => storage.loadHistory(),

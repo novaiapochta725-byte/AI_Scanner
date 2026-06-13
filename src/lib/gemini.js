@@ -1,8 +1,7 @@
 const ANALYSIS_PROMPT = `You are a product identification expert. Analyze this product image.
 
-STEP 1 — Observe: brand logos, colors, camera layout, packaging text, materials.
-STEP 2 — Search: use Google Search to find the exact product model, including newest devices (e.g. iPhone 17 Pro Max).
-STEP 3 — Return result as JSON only.
+Observe: brand logos, colors, camera layout, packaging text, materials.
+Return result as JSON only.
 
 CRITICAL: Return ONLY a single valid JSON object. No markdown. No extra text.
 All string values must be on one line. Escape quotes inside strings with backslash.
@@ -19,15 +18,15 @@ All string values must be on one line. Escape quotes inside strings with backsla
 
 Rules:
 - Match camera module, lens count, color, edge design to a specific model.
-- Search latest generation first (2025-2026).
 - confidence 85+ only when model is confirmed.
 - alternatives: 3 close variants.`;
 
 const STRUCTURED_PROMPT = `Analyze this product image and identify the exact model.
 Return ONLY valid JSON with keys: product_name, brand, category, description, confidence, search_query, alternatives.
-Use Google Search context if available. Keep all string values on one line.`;
+Keep all string values on one line.`;
 
 const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+const REQUEST_TIMEOUT_MS = 45000;
 
 function parseApiError(status, errText, model) {
   let detail = '';
@@ -89,8 +88,25 @@ function buildRequestBody(imageBase64, mimeType, mode) {
   return body;
 }
 
+async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const e = new Error('Request timed out. Check your connection and try again.');
+      e.status = 408;
+      throw e;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callModel(apiKey, model, body) {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
@@ -247,24 +263,31 @@ function isParseError(err) {
   return err instanceof SyntaxError || err.message?.includes('parse Gemini');
 }
 
+function shouldTryNext(err, mode) {
+  if (isParseError(err)) return true;
+  if (err.status === 408) return true;
+  if (err.status === 400 && mode === 'search') return true;
+  if (err.status === 404 || err.status === 429) return false;
+  return false;
+}
+
 export async function analyzeProduct(apiKey, imageBase64, mimeType) {
   let lastError = null;
 
+  // JSON mode first — faster and more reliable on mobile; search is fallback only
   for (const model of MODELS) {
-    for (const mode of ['search', 'json']) {
+    for (const mode of ['json', 'search']) {
       try {
         const body = buildRequestBody(imageBase64, mimeType, mode);
         const text = await callModel(apiKey, model, body);
         return parseResult(text);
       } catch (err) {
         lastError = err;
-        if (isParseError(err) && mode === 'search') continue;
-        if (err.status === 400 && mode === 'search') continue;
-        if (err.status === 404 || err.status === 429) break;
-        if (isParseError(err)) continue;
+        if (shouldTryNext(err, mode)) continue;
         throw err;
       }
     }
+    if (lastError?.status === 404 || lastError?.status === 429) break;
   }
 
   throw lastError || new Error('All Gemini models unavailable. Check your API key and quota.');

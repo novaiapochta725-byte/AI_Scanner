@@ -1,5 +1,9 @@
 import { bindButton, blurActiveInput, scrollIntoView } from './touch.js';
-import { getTranslateSettings, saveTranslateSettings } from './storage.js';
+import {
+  getApiKeyLocal,
+  getTranslateSettingsLocal,
+  saveTranslateSettings,
+} from './storage.js';
 import { TRANSLATE_LANGUAGES, languageLabel } from './translate-languages.js';
 import { LiveTranslateSession } from './live-translate.js';
 
@@ -50,21 +54,29 @@ function populateLanguageSelect() {
   }
 }
 
-async function loadSettings() {
-  populateLanguageSelect();
-  const s = await getTranslateSettings();
-  $('#translate-target-lang').value = s.targetLanguage;
-  $('#translate-echo').checked = s.echoTargetLanguage;
-  $('#translate-transcripts').checked = s.showTranscripts;
-  $('#translate-transcript-panel').classList.toggle('hidden', !s.showTranscripts);
-}
-
-async function persistSettings() {
-  await saveTranslateSettings({
+function readSettingsFromDom() {
+  return {
     targetLanguage: $('#translate-target-lang').value,
     echoTargetLanguage: $('#translate-echo').checked,
     showTranscripts: $('#translate-transcripts').checked,
-  });
+  };
+}
+
+function applySettingsToDom(settings) {
+  $('#translate-target-lang').value = settings.targetLanguage;
+  $('#translate-echo').checked = settings.echoTargetLanguage;
+  $('#translate-transcripts').checked = settings.showTranscripts;
+  $('#translate-transcript-panel').classList.toggle('hidden', !settings.showTranscripts);
+}
+
+function loadSettings() {
+  populateLanguageSelect();
+  const s = getTranslateSettingsLocal();
+  applySettingsToDom(s);
+}
+
+function persistSettingsFromDom() {
+  void saveTranslateSettings(readSettingsFromDom());
 }
 
 async function toggleSession() {
@@ -73,29 +85,31 @@ async function toggleSession() {
   if (session) {
     await session.stop();
     session = null;
-    $('#btn-translate-toggle').textContent = '▶ Начать перевод';
-    $('#btn-translate-toggle').classList.remove('is-active');
+    const btn = $('#btn-translate-toggle');
+    btn.textContent = '▶ Начать перевод';
+    btn.classList.remove('is-active', 'is-loading');
+    btn.disabled = false;
     setStatus('idle');
     return;
   }
 
-  const hasKey = await window.api.hasApiKey();
-  if (!hasKey) {
+  const apiKey = getApiKeyLocal();
+  if (!apiKey) {
     setStatus('error', 'Добавьте Gemini API key в Settings');
     scrollIntoView($('#translate-no-key'));
     return;
   }
 
-  await persistSettings();
-  const apiKey = await window.api.getApiKey();
-  const settings = await getTranslateSettings();
+  const settings = readSettingsFromDom();
+  persistSettingsFromDom();
 
   clearTranscripts();
   setStatus('connecting');
 
   const btn = $('#btn-translate-toggle');
-  btn.textContent = '⏹ Остановить';
-  btn.classList.add('is-active');
+  btn.textContent = 'Подключение…';
+  btn.classList.add('is-loading');
+  btn.disabled = true;
 
   session = new LiveTranslateSession({
     apiKey,
@@ -112,17 +126,23 @@ async function toggleSession() {
       setStatus('error', err.message || 'Ошибка соединения');
       session = null;
       btn.textContent = '▶ Начать перевод';
-      btn.classList.remove('is-active');
+      btn.classList.remove('is-active', 'is-loading');
+      btn.disabled = false;
     },
   });
 
   try {
     await session.start();
+    btn.textContent = '⏹ Остановить';
+    btn.classList.remove('is-loading');
+    btn.classList.add('is-active');
+    btn.disabled = false;
   } catch (err) {
     setStatus('error', err.message || 'Не удалось начать перевод');
     session = null;
     btn.textContent = '▶ Начать перевод';
-    btn.classList.remove('is-active');
+    btn.classList.remove('is-active', 'is-loading');
+    btn.disabled = false;
   }
 }
 
@@ -133,17 +153,17 @@ export async function stopTranslateIfRunning() {
     const btn = $('#btn-translate-toggle');
     if (btn) {
       btn.textContent = '▶ Начать перевод';
-      btn.classList.remove('is-active');
+      btn.classList.remove('is-active', 'is-loading');
+      btn.disabled = false;
     }
     setStatus('idle');
   }
 }
 
 export async function initTranslateUI() {
-  populateLanguageSelect();
-  await loadSettings();
+  loadSettings();
 
-  const hasKey = await window.api.hasApiKey();
+  const hasKey = !!getApiKeyLocal();
   $('#translate-no-key')?.classList.toggle('hidden', hasKey);
 
   bindButton($('#btn-translate-toggle'), toggleSession);
@@ -155,15 +175,15 @@ export async function initTranslateUI() {
     $('#translate-no-key')?.classList.toggle('hidden', saved);
   };
 
-  $('#translate-target-lang')?.addEventListener('change', persistSettings);
-  $('#translate-echo')?.addEventListener('change', persistSettings);
-  $('#translate-transcripts')?.addEventListener('change', async () => {
-    await persistSettings();
+  $('#translate-target-lang')?.addEventListener('change', persistSettingsFromDom);
+  $('#translate-echo')?.addEventListener('change', persistSettingsFromDom);
+  $('#translate-transcripts')?.addEventListener('change', () => {
+    persistSettingsFromDom();
     const show = $('#translate-transcripts').checked;
     $('#translate-transcript-panel').classList.toggle('hidden', !show);
   });
 
-  const targetLabel = languageLabel((await getTranslateSettings()).targetLanguage);
+  const targetLabel = languageLabel(getTranslateSettingsLocal().targetLanguage);
   $('#translate-subtitle').textContent =
     `Gemini 3.5 Live Translate → ${targetLabel}. Говорите — слышите перевод в наушниках или динамике.`;
 }

@@ -181,7 +181,7 @@ async function analyzeImage() {
   setButtonLoading(btn, true, 'Analyzing…');
   scrollIntoView($('.panel-result'));
 
-  const hasKey = await window.api.hasApiKey();
+  const hasKey = window.api.hasApiKeyLocal?.() || (await window.api.hasApiKey());
   if (!hasKey) {
     setButtonLoading(btn, false);
     btn.disabled = false;
@@ -198,10 +198,12 @@ async function analyzeImage() {
       `data:${currentImage.mimeType};base64,${currentImage.base64}`;
     const prepared = await prepareImageForAnalysis(previewSrc);
 
-    const { result } = await window.api.analyzeImage(
-      prepared.base64,
-      prepared.mimeType
-    );
+    const { result } = await Promise.race([
+      window.api.analyzeImage(prepared.base64, prepared.mimeType),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Analysis timed out (90s). Try again.')), 90000);
+      }),
+    ]);
     renderResult(result);
     scrollIntoView($('#result-content'));
     await hapticSuccess();

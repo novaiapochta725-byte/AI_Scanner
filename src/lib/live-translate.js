@@ -47,6 +47,14 @@ function base64ToInt16(base64) {
   return out;
 }
 
+async function wsDataToText(raw) {
+  if (typeof raw === 'string') return raw;
+  if (raw instanceof Blob) return raw.text();
+  if (raw instanceof ArrayBuffer) return new TextDecoder().decode(raw);
+  if (ArrayBuffer.isView(raw)) return new TextDecoder().decode(raw.buffer);
+  return String(raw);
+}
+
 export class LiveTranslateSession {
   constructor(options) {
     this.apiKey = options.apiKey;
@@ -68,6 +76,7 @@ export class LiveTranslateSession {
     this.pcmBuffer = [];
     this.samplesPerChunk = (INPUT_RATE * CHUNK_MS) / 1000;
     this.nextPlayTime = 0;
+    this.connectReject = null;
   }
 
   async start() {
@@ -75,26 +84,44 @@ export class LiveTranslateSession {
     this.running = true;
     this.onStatus('connecting');
 
+    // Must run in user-gesture context on iOS — call before any long async chain
     this.playbackContext = new AudioContext({ sampleRate: OUTPUT_RATE });
     await this.playbackContext.resume();
 
-    this.micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        channelCount: 1,
-      },
-      video: false,
-    });
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1,
+        },
+        video: false,
+      });
+    } catch {
+      this.running = false;
+      await this.playbackContext.close().catch(() => {});
+      this.playbackContext = null;
+      throw new Error('Нет доступа к микрофону. Разрешите в Настройках iPhone → приложение.');
+    }
 
-    await this._connectWebSocket();
-    await this._startMicCapture();
-    this.onStatus('listening');
+    try {
+      await this._connectWebSocket();
+      await this._startMicCapture();
+      this.onStatus('listening');
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
   }
 
   async stop() {
     this.running = false;
     this.setupDone = false;
+
+    if (this.connectReject) {
+      this.connectReject(new Error('Stopped'));
+      this.connectReject = null;
+    }
 
     if (this.processor) {
       this.processor.disconnect();
@@ -114,6 +141,7 @@ export class LiveTranslateSession {
       this.micStream = null;
     }
     if (this.ws) {
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
@@ -127,12 +155,25 @@ export class LiveTranslateSession {
 
   _connectWebSocket() {
     return new Promise((resolve, reject) => {
+      this.connectReject = reject;
       const url = `${WS_PATH}?key=${encodeURIComponent(this.apiKey)}`;
       this.ws = new WebSocket(url);
 
       const timeout = setTimeout(() => {
-        reject(new Error('Connection timeout'));
+        reject(new Error('Connection timeout (15s). Check internet and API key.'));
+        try {
+          this.ws?.close();
+        } catch {
+          /* ignore */
+        }
       }, 15000);
+
+      const finishConnect = (err) => {
+        clearTimeout(timeout);
+        this.connectReject = null;
+        if (err) reject(err);
+        else resolve();
+      };
 
       this.ws.onopen = () => {
         this.ws.send(JSON.stringify({
@@ -151,24 +192,25 @@ export class LiveTranslateSession {
         }));
       };
 
-      this.ws.onmessage = (event) => {
+      this.ws.onmessage = async (event) => {
         let data;
         try {
-          data = JSON.parse(event.data);
+          const text = await wsDataToText(event.data);
+          data = JSON.parse(text);
         } catch {
           return;
         }
 
-        if (data.setupComplete) {
-          clearTimeout(timeout);
+        if (data.setupComplete != null) {
           this.setupDone = true;
-          resolve();
+          finishConnect();
           return;
         }
 
         if (data.error) {
           const msg = data.error.message || JSON.stringify(data.error);
           this.onError(new Error(msg));
+          if (!this.setupDone) finishConnect(new Error(msg));
           return;
         }
 
@@ -191,14 +233,17 @@ export class LiveTranslateSession {
       };
 
       this.ws.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error('WebSocket connection failed'));
+        finishConnect(new Error('WebSocket connection failed. Check API key and network.'));
       };
 
       this.ws.onclose = (e) => {
+        if (!this.setupDone && this.connectReject) {
+          finishConnect(new Error(e.reason || 'Connection closed before setup'));
+          return;
+        }
         if (this.running) {
           this.onError(new Error(e.reason || 'Connection closed'));
-          this.stop();
+          void this.stop();
         }
       };
     });

@@ -111,12 +111,20 @@ export async function saveApiKey(apiKey) {
   void write(API_KEY_STORAGE, apiKey);
 }
 
+export function getApiKeyLocal() {
+  return readLocal(API_KEY_STORAGE);
+}
+
+export function hasApiKeyLocal() {
+  return !!readLocal(API_KEY_STORAGE);
+}
+
 export async function getApiKey() {
   return readLocal(API_KEY_STORAGE) || (await read(API_KEY_STORAGE)) || null;
 }
 
 export async function hasApiKey() {
-  return !!readLocal(API_KEY_STORAGE) || !!(await read(API_KEY_STORAGE));
+  return hasApiKeyLocal() || !!(await read(API_KEY_STORAGE));
 }
 
 export async function getApiKeyStatus() {
@@ -163,8 +171,12 @@ export async function getHistoryItem(id) {
 }
 
 export async function getTranslateSettings() {
+  return getTranslateSettingsLocal();
+}
+
+export function getTranslateSettingsLocal() {
   try {
-    const raw = readLocal(TRANSLATE_SETTINGS_KEY) || (await read(TRANSLATE_SETTINGS_KEY));
+    const raw = readLocal(TRANSLATE_SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_TRANSLATE_SETTINGS };
     return { ...DEFAULT_TRANSLATE_SETTINGS, ...JSON.parse(raw) };
   } catch {
@@ -174,6 +186,7 @@ export async function getTranslateSettings() {
 
 export async function saveTranslateSettings(settings) {
   const merged = { ...DEFAULT_TRANSLATE_SETTINGS, ...settings };
-  await write(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
+  writeLocal(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
+  void write(TRANSLATE_SETTINGS_KEY, JSON.stringify(merged));
   return merged;
 }
